@@ -15,6 +15,13 @@ def test_packaged_contract_and_checkout_are_pinned() -> None:
     validate_contract()
     assert CONTRACT["runtime"]["canonical"] == "native_docker_via_upstream_openhands"
     assert CONTRACT["runtime"]["daytona_canonical"] is False
+    assert CONTRACT["runtime"]["file_tracking"] == {
+        "protocol": "filetracking/1",
+        "root": "unique_upstream_openhands_tmp_dir_per_rollout",
+        "tracks_model_workspace": True,
+        "shell_capability_published": False,
+        "cleanup": "deferred_until_after_hud_observer_flush_then_original_keep_tmp_policy",
+    }
     assert CONTRACT["scoring"]["primary_metric"] == "paper_era_agent_wide_any_of"
     assert CONTRACT["scoring"]["scheduled_task_binding_enforced"] is False
     assert CONTRACT["scoring"]["current_faq_final_submission_claimed"] is False

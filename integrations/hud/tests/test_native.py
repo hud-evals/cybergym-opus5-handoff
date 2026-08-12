@@ -7,8 +7,10 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
+from hud.eval.file_tracking import FileTrackingClient
 from hud.types import Trace
 
+from cybergym_hud.env import build_env
 from cybergym_hud.native import (
     NativeOpenHandsAgent,
     NativeOpenHandsConfig,
@@ -147,3 +149,35 @@ async def test_hud_agent_rejects_cross_task_server_binding(config: NativeOpenHan
     assert receipt.status == "error"
     assert "does not match" in receipt.error
     assert trace.status == "error"
+
+
+@pytest.mark.asyncio
+async def test_receipt_env_observes_real_upstream_workspace_without_shell(
+    config: NativeOpenHandsConfig,
+) -> None:
+    receipt_env = build_env(file_tracking_root=config.tmp_dir)
+    await receipt_env.start()
+    client = None
+    try:
+        assert [capability.name for capability in receipt_env.capabilities] == ["filetracking"]
+        capability = receipt_env.capability("filetracking")
+        assert capability.protocol == "filetracking/1"
+        assert capability.params["root"] == config.tmp_dir.resolve().as_posix()
+
+        client = await FileTrackingClient.connect(capability)
+        await client.call("setup")
+
+        # This is the exact directory shape that upstream run_with_configs
+        # creates and bind-mounts as /workspace for the OpenHands model.
+        model_workspace = config.tmp_dir / f"arvo_10013-{'1' * 32}" / "workspace"
+        model_workspace.mkdir(parents=True)
+        (model_workspace / "poc").write_bytes(b"tracked exploit input")
+
+        observed = await client.call("diff")
+        assert observed["files_changed"] == 1
+        assert observed["patches"][0]["path"] == f"arvo_10013-{'1' * 32}/workspace/poc"
+        assert observed["patches"][0]["status"] == "added"
+    finally:
+        if client is not None:
+            await client.close()
+        await receipt_env.stop()

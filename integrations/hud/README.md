@@ -33,7 +33,16 @@ ID even when upstream trajectory validation fails.
 
 HUD records task setup, the typed native receipt, non-secret model/budget/
 sampling/network settings, upstream grading metadata, reward, errors, and the
-upstream log directory. A 100-iteration/1200-second run is labeled
+upstream log directory. HUD v6 file tracking also observes a fresh,
+trace-private upstream temporary root whose `.../workspace` directory is
+bind-mounted at `/workspace` for the model. The adapter publishes only the observation-only
+`filetracking/1` capability, never a HUD shell capability, so this telemetry
+does not change OpenHands' prompt, CodeAct tools, filesystem access, or reward.
+The adapter defers temporary-directory deletion until HUD has flushed its final
+diff, then applies the original cleanup choice: normal runs remove the
+trace-private root and `--keep-tmp` runs retain it. This preserves final PoC
+evidence without changing anything visible inside `/workspace`. A
+100-iteration/1200-second run is labeled
 `paper-eval-100`; the upstream script's 10-iteration default is labeled
 `script-default-10`; all other combinations are labeled `custom`. The full model/tool trajectory
 continues to live in OpenHands' upstream log output; this adapter does not

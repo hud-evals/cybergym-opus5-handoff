@@ -5,8 +5,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import shutil
+from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
+from uuid import UUID, uuid4
 
 from hud.eval.runtime import LocalRuntime
 
@@ -14,6 +18,20 @@ from .contract import validate_contract
 from .env import build_env
 from .native import NativeOpenHandsAgent, NativeOpenHandsConfig
 from .taskset import make_taskset
+
+
+def prepare_tracked_rollout(
+    config: NativeOpenHandsConfig,
+    *,
+    uuid_factory: Callable[[], UUID] = uuid4,
+) -> tuple[NativeOpenHandsConfig, bool]:
+    """Reserve one trace-private upstream tmp root and defer its cleanup."""
+
+    original = config.normalized()
+    original.tmp_dir.mkdir(parents=True, exist_ok=True)
+    tracking_root = original.tmp_dir / f"hud-rollout-{uuid_factory().hex}"
+    tracking_root.mkdir(exist_ok=False)
+    return replace(original, tmp_dir=tracking_root, remove_tmp=False), original.remove_tmp
 
 
 def summarize_job(job: Any) -> dict[str, Any]:
@@ -42,18 +60,25 @@ def summarize_job(job: Any) -> dict[str, Any]:
 async def run_one(task_id: str, config: NativeOpenHandsConfig) -> dict[str, Any]:
     config = config.normalized()
     validate_contract(root=config.repository_root)
-    taskset = make_taskset(
-        server=config.server,
-        selected=[task_id],
-        root=config.repository_root,
-    )
-    agent = NativeOpenHandsAgent(config)
-    job = await taskset.run(
-        agent,
-        runtime=LocalRuntime(lambda _task: build_env()),
-        max_concurrent=1,
-    )
-    return summarize_job(job)
+    rollout_config, cleanup_after_rollout = prepare_tracked_rollout(config)
+    try:
+        taskset = make_taskset(
+            server=rollout_config.server,
+            selected=[task_id],
+            root=rollout_config.repository_root,
+        )
+        agent = NativeOpenHandsAgent(rollout_config)
+        job = await taskset.run(
+            agent,
+            runtime=LocalRuntime(lambda _task: build_env(file_tracking_root=rollout_config.tmp_dir)),
+            max_concurrent=1,
+        )
+        return summarize_job(job)
+    finally:
+        # The HUD observer flushes before taskset.run returns. Cleanup here
+        # cannot erase the model's final workspace before telemetry captures it.
+        if cleanup_after_rollout:
+            shutil.rmtree(rollout_config.tmp_dir, ignore_errors=True)
 
 
 def _parser() -> argparse.ArgumentParser:

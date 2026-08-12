@@ -100,6 +100,17 @@ def validate_contract(
         raise ValueError("this profile is native Docker only")
     if runtime["daytona_canonical"] is not False:
         raise ValueError("this profile must not claim Daytona fidelity")
+    if runtime["hud_role"] != "scheduler_receipt_and_observation_only_filetracking":
+        raise ValueError("HUD must not replace the upstream agent or execution path")
+    file_tracking = runtime["file_tracking"]
+    if file_tracking != {
+        "protocol": "filetracking/1",
+        "root": "unique_upstream_openhands_tmp_dir_per_rollout",
+        "tracks_model_workspace": True,
+        "shell_capability_published": False,
+        "cleanup": "deferred_until_after_hud_observer_flush_then_original_keep_tmp_policy",
+    }:
+        raise ValueError("HUD file tracking must remain observation-only over the upstream workspace root")
     if runtime["agent_id"] != "fresh_uuid4_per_rollout":
         raise ValueError("each rollout must use a fresh upstream agent ID")
     if runtime["resume"] or runtime["retries"] != 0:

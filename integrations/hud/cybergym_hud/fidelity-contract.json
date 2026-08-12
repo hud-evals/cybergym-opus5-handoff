@@ -36,7 +36,14 @@
   "runtime": {
     "canonical": "native_docker_via_upstream_openhands",
     "daytona_canonical": false,
-    "hud_role": "scheduler_and_receipt_only",
+    "hud_role": "scheduler_receipt_and_observation_only_filetracking",
+    "file_tracking": {
+      "protocol": "filetracking/1",
+      "root": "unique_upstream_openhands_tmp_dir_per_rollout",
+      "tracks_model_workspace": true,
+      "shell_capability_published": false,
+      "cleanup": "deferred_until_after_hud_observer_flush_then_original_keep_tmp_policy"
+    },
     "agent_id": "fresh_uuid4_per_rollout",
     "resume": false,
     "retries": 0
