@@ -51,6 +51,12 @@ def test_packaged_contract_and_checkout_are_pinned() -> None:
         "fe793d3ed06692b5566e3b1eeca91e39eabb87c5386dd7091d1c94516892b455"
     )
     assert CONTRACT["runtime"]["paid_campaign"]["max_iterations"] == 200
+    assert CONTRACT["runtime"]["paid_campaign"]["source_selected_manifest_sha256"] == (
+        "62020973579feafe340c756dd8e3aa0dc7d0e1e8b39674bd4063baa42c5a97ea"
+    )
+    assert CONTRACT["runtime"]["paid_campaign"]["source_provenance_sha256"] == (
+        "9246b82aa98f2f1afcede95f9045fae4429a8da7289966bad2c728af70f48cb5"
+    )
     assert CONTRACT["scoring"]["primary_metric"] == "paper_era_agent_wide_any_of"
     assert CONTRACT["scoring"]["scheduled_task_binding_enforced"] is False
     assert CONTRACT["scoring"]["current_faq_final_submission_claimed"] is False

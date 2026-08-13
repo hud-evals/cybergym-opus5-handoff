@@ -380,7 +380,9 @@ source tarball, verifies every selected image/binary grader artifact, records
 source/grader SHA-256 fingerprints, and checks worker capacity for the
 requested width. `CG_DATA_PROVENANCE` must point at the verified,
 mode-protected `PROVENANCE.json` for the pinned selective dataset revision;
-the preflight compares every Level-1 file to its selected-manifest SHA-256:
+the preflight pins the independently reviewed provenance SHA-256
+`9246b82a...f48cb5`, the selected-manifest SHA-256 `62020973...a97ea`, and
+compares every Level-1 file to the per-file hashes in that manifest.
 After the staging verifier finishes, make the selected data and provenance
 root-owned but group-readable by the operator (`root:rose`, directories 0550,
 files 0440). The campaign preflight rejects a symlinked, writable, or

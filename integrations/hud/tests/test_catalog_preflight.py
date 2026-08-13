@@ -118,6 +118,14 @@ def test_source_provenance_is_pinned_and_manifest_hash_verified(
     provenance_path = provenance_dir / "PROVENANCE.json"
     provenance_path.write_text(json.dumps(provenance), encoding="utf-8")
     provenance_path.chmod(0o440)
+    monkeypatch.setattr(
+        "cybergym_hud.catalog_preflight.SOURCE_SELECTED_MANIFEST_SHA256",
+        hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+    )
+    monkeypatch.setattr(
+        "cybergym_hud.catalog_preflight.SOURCE_PROVENANCE_SHA256",
+        hashlib.sha256(provenance_path.read_bytes()).hexdigest(),
+    )
 
     hashes, fields = _load_source_provenance(provenance_path, data_dir=data_dir, require_root_owner=False)
     assert len(hashes) == 3_014

@@ -40,6 +40,8 @@ SOURCE_REPOSITORY = "sunblaze-ucb/cybergym"
 SOURCE_REVISION = "bde190ded494e52bc684b66073b436c9d992c7c6"
 SOURCE_FILE_COUNT = 3_017
 SOURCE_TOTAL_BYTES = 118_156_327_554
+SOURCE_SELECTED_MANIFEST_SHA256 = "62020973579feafe340c756dd8e3aa0dc7d0e1e8b39674bd4063baa42c5a97ea"
+SOURCE_PROVENANCE_SHA256 = "9246b82aa98f2f1afcede95f9045fae4429a8da7289966bad2c728af70f48cb5"
 # The released binary-only grader corpus has no upstream revision manifest.
 # This is therefore a reviewed deployment snapshot identity, not a claim about
 # upstream provenance.  It was computed with _tree_digest/v1 over the complete
@@ -164,6 +166,17 @@ def _load_source_provenance(
     ):
         drift["task_catalog"] = {"expected": {"count": 1_507, "unique_count": 1_507}, "observed": task_catalog}
     manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    provenance_sha256 = hashlib.sha256(provenance_bytes).hexdigest()
+    if manifest_sha256 != SOURCE_SELECTED_MANIFEST_SHA256:
+        drift["reviewed_selected_manifest_sha256"] = {
+            "expected": SOURCE_SELECTED_MANIFEST_SHA256,
+            "observed": manifest_sha256,
+        }
+    if provenance_sha256 != SOURCE_PROVENANCE_SHA256:
+        drift["reviewed_provenance_sha256"] = {
+            "expected": SOURCE_PROVENANCE_SHA256,
+            "observed": provenance_sha256,
+        }
     if provenance.get("selected_manifest_sha256") != manifest_sha256:
         drift["selected_manifest_sha256"] = {
             "expected": provenance.get("selected_manifest_sha256"),
@@ -199,7 +212,7 @@ def _load_source_provenance(
         raise CatalogPreflightError("source selected manifest does not cover every Level-1 task artifact")
     return hashes, {
         "source_revision": SOURCE_REVISION,
-        "source_provenance_sha256": hashlib.sha256(provenance_bytes).hexdigest(),
+        "source_provenance_sha256": provenance_sha256,
         "source_selected_manifest_sha256": manifest_sha256,
     }
 

@@ -181,6 +181,8 @@ def validate_contract(
         "default_shard_size": 12,
         "source_repository": "sunblaze-ucb/cybergym",
         "source_revision": "bde190ded494e52bc684b66073b436c9d992c7c6",
+        "source_selected_manifest_sha256": "62020973579feafe340c756dd8e3aa0dc7d0e1e8b39674bd4063baa42c5a97ea",
+        "source_provenance_sha256": "9246b82aa98f2f1afcede95f9045fae4429a8da7289966bad2c728af70f48cb5",
         "reviewed_binary_tree_sha256": "fe793d3ed06692b5566e3b1eeca91e39eabb87c5386dd7091d1c94516892b455",
         "binary_identity_scope": "reviewed_deployment_snapshot_not_upstream_provenance",
         "runtime_nano_cpus": 4_000_000_000,
