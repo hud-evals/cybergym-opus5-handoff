@@ -208,10 +208,11 @@ def test_campaign_service_uses_a_deterministic_operator_path() -> None:
     installer = (OPS / "install-campaign-service.sh").read_text(encoding="utf-8")
     assert "OPERATOR_PATH=/home/$OPERATOR/.local/bin:/usr/local/bin:/usr/bin:/bin" in installer
     assert "POETRY_CACHE_DIR=/srv/cybergym-runtime/cache/poetry" in installer
-    assert 'env HOME="/home/$OPERATOR" PATH="$OPERATOR_PATH" POETRY_CACHE_DIR="$POETRY_CACHE_DIR"' in installer
     assert "Environment=HOME=/home/$OPERATOR" in installer
     assert "Environment=PATH=$OPERATOR_PATH" in installer
     assert "Environment=POETRY_CACHE_DIR=$POETRY_CACHE_DIR" in installer
+    assert "campaign-preflight --max-concurrent" not in installer
+    assert "campaign.sh` performs the authoritative no-spend preflight" in installer
 
 
 def test_setup_and_services_do_not_mutate_the_pinned_checkout() -> None:
@@ -300,7 +301,8 @@ def test_private_server_is_unmasked_and_docker_bridge_only() -> None:
 
 def test_campaign_service_is_preflighted_durable_and_does_not_error_loop() -> None:
     installer = (OPS / "install-campaign-service.sh").read_text(encoding="utf-8")
-    assert "campaign-preflight --max-concurrent 4" in installer
+    assert "campaign-preflight --max-concurrent 4" not in installer
+    assert "campaign.sh` performs the authoritative no-spend preflight" in installer
     assert "--confirm-paid-all --max-concurrent 4 --shard-size 12" in installer
     assert "Restart=on-abnormal" in installer
     assert "Restart=on-failure" not in installer

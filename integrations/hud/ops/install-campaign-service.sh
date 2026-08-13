@@ -15,8 +15,9 @@ usage() {
     cat <<'EOF'
 Usage: sudo install-campaign-service.sh --confirm-paid-all [--operator USER] [--repository-root PATH]
 
-Runs the complete no-inference catalog preflight as OPERATOR, then installs,
-enables, and starts cybergym-campaign.service at rolling concurrency 4.
+Installs, enables, and starts cybergym-campaign.service at rolling concurrency
+4. The service's campaign helper runs the complete no-inference catalog
+preflight before it can create a HUD Job or call the model.
 EOF
 }
 
@@ -44,13 +45,6 @@ systemctl is-active --quiet cybergym-server.service \
     || { printf '%s\n' 'install-campaign-service: CyberGym server is not active' >&2; exit 1; }
 OPERATOR_PATH=/home/$OPERATOR/.local/bin:/usr/local/bin:/usr/bin:/bin
 POETRY_CACHE_DIR=/srv/cybergym-runtime/cache/poetry
-
-# This is the final no-spend boundary. Run it with the same user/groups and
-# external environment files as the paid service.
-runuser -u "$OPERATOR" -- \
-    env HOME="/home/$OPERATOR" PATH="$OPERATOR_PATH" POETRY_CACHE_DIR="$POETRY_CACHE_DIR" \
-    "$REPOSITORY_ROOT/integrations/hud/ops/cybergym-ops" \
-    campaign-preflight --max-concurrent 4 --repository-root "$REPOSITORY_ROOT"
 
 UNIT=/etc/systemd/system/cybergym-campaign.service
 TMP=$(mktemp /etc/systemd/system/.cybergym-campaign.XXXXXX)
@@ -94,6 +88,9 @@ trap - EXIT HUP INT TERM
 systemctl daemon-reload
 systemctl enable cybergym-campaign.service
 systemctl start cybergym-campaign.service
+# `campaign.sh` performs the authoritative no-spend preflight inside this
+# exact service context. Do not duplicate its full 248-GB read here; any
+# failure exits before Job creation/provider spend and leaves the unit failed.
 systemctl is-active --quiet cybergym-campaign.service \
     || { printf '%s\n' 'install-campaign-service: campaign did not become active' >&2; exit 1; }
 printf '%s\n' 'Installed and started cybergym-campaign.service (gpt-5.6-sol/xhigh, 200 steps, rolling width 4).'
