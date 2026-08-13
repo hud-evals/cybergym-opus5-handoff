@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import threading
 from dataclasses import fields
@@ -11,6 +12,7 @@ from uuid import UUID
 
 import pytest
 from hud import Taskset
+from hud.eval import Job
 from hud.eval.runtime import LocalRuntime
 from hud.graders import EvaluationResult
 
@@ -29,6 +31,21 @@ from cybergym_hud.scheduler import (
 )
 from cybergym_hud.tasks import make_task
 from cybergym_hud.taskset import task_ids
+
+
+@pytest.fixture(autouse=True)
+def _no_external_hud_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _no_report(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("hud.eval.run.trace_enter", _no_report)
+    monkeypatch.setattr("hud.eval.run.trace_exit", _no_report)
+    monkeypatch.setattr("hud.eval.taskset.job_enter", _no_report)
+    monkeypatch.setattr("hud.eval.taskset.flush", lambda **_kwargs: True)
+    monkeypatch.setattr("hud.eval.file_tracking.queue_span", lambda _span: None)
+    instrument_module = importlib.import_module("hud.telemetry.instrument")
+    monkeypatch.setattr(instrument_module, "queue_span", lambda _span: None)
+    monkeypatch.setattr("hud.types.queue_span", lambda _span: None)
 
 
 @pytest.mark.asyncio
@@ -201,12 +218,17 @@ async def test_run_one_flushes_final_workspace_before_applying_cleanup_policy(
     )
     monkeypatch.setattr("cybergym_hud.scheduler.validate_contract", lambda **_kwargs: None)
     monkeypatch.setattr("cybergym_hud.scheduler.NativeOpenHandsAgent", WorkspaceWritingAgent)
+
+    async def _local_job(_taskset, name):
+        return Job(id="1" * 32, name=name)
+
+    monkeypatch.setattr("cybergym_hud.scheduler._start_named_job", _local_job)
     monkeypatch.setattr("cybergym_hud.env.grade_receipt", _grade)
     monkeypatch.setattr(observer, "_emit_file_tracking", _emit)
     monkeypatch.setattr(settings, "telemetry_enabled", True)
     monkeypatch.setattr(settings, "file_tracking_interval", 60.0)
 
-    await run_one("arvo:10013", config)
+    result = await run_one("arvo:10013", config, job_name="cybergym-gpt5.6-sol")
 
     changed_paths = {
         patch["path"]
@@ -216,6 +238,7 @@ async def test_run_one_flushes_final_workspace_before_applying_cleanup_policy(
     }
     assert f"arvo_10013-{'a' * 32}/workspace/poc" in changed_paths
     assert observed_root.exists() is (not remove_tmp)
+    assert result["job_name"] == "cybergym-gpt5.6-sol"
 
 
 @pytest.mark.asyncio
@@ -312,6 +335,11 @@ async def test_run_many_uses_a_rolling_fifteen_slot_window_with_isolated_cleanup
 
     uuid_values = iter(UUID(int=index) for index in range(1, 18))
     monkeypatch.setattr("cybergym_hud.scheduler.validate_contract", lambda **_kwargs: None)
+
+    async def _local_job(_taskset, name):
+        return Job(id="2" * 32, name=name)
+
+    monkeypatch.setattr("cybergym_hud.scheduler._start_named_job", _local_job)
     monkeypatch.setattr("cybergym_hud.env.grade_receipt", _grade)
     monkeypatch.setattr(observer, "_emit_file_tracking", _emit)
     monkeypatch.setattr(settings, "telemetry_enabled", True)
@@ -324,6 +352,7 @@ async def test_run_many_uses_a_rolling_fifteen_slot_window_with_isolated_cleanup
             max_concurrent=15,
             executor=executor,
             uuid_factory=lambda: next(uuid_values),
+            job_name="cybergym-gpt5.6-sol",
         )
     )
     assert await asyncio.to_thread(first_wave_started.wait, 10)
@@ -349,6 +378,7 @@ async def test_run_many_uses_a_rolling_fifteen_slot_window_with_isolated_cleanup
     result = await asyncio.wait_for(batch, timeout=20)
 
     assert result["task_count"] == 17
+    assert result["job_name"] == "cybergym-gpt5.6-sol"
     assert [run["native_receipt"]["task_id"] for run in result["runs"]] == list(selected)
     assert len(set(roots.values())) == 17
     assert all(not root.exists() for root in roots.values())

@@ -10,8 +10,9 @@ REPOSITORY_ROOT=${CG_REPOSITORY_ROOT:-$DEFAULT_ROOT}
 TASK_ID=${CG_SMOKE_TASK_ID:-arvo:10400}
 DATA_DIR=${CG_DATA_DIR:-}
 SERVER_URL=${CG_SERVER_URL:-}
-MODEL=${CG_MODEL:-claude-sonnet-4-5}
+MODEL=${CG_MODEL:-gpt-5.6-sol}
 MODEL_BASE_URL=${CG_MODEL_BASE_URL:-}
+REASONING_EFFORT=${CG_REASONING_EFFORT:-xhigh}
 RESULTS_DIR=${CG_RESULTS_DIR:-}
 SERVER_MODE=${CG_SERVER_MODE:-images}
 SERVER_BINARY_DIR=${CG_SERVER_BINARY_DIR:-}
@@ -141,6 +142,16 @@ OPENHANDS_ROOT=$REPOSITORY_ROOT/examples/agents/openhands/openhands-repo
 (cd "$OPENHANDS_ROOT" && poetry run python -c 'import openhands' >/dev/null 2>&1) \
     || die "pinned OpenHands Python environment is not built; run ops/setup.sh"
 ok 'pinned OpenHands build'
+
+if [ "$MODEL" = gpt-5.6-sol ]; then
+    [ "$REASONING_EFFORT" = xhigh ] \
+        || die "gpt-5.6-sol runs require CG_REASONING_EFFORT=xhigh"
+    uv run --project "$REPOSITORY_ROOT/integrations/hud" python \
+        "$SCRIPT_DIR/verify-reasoning-transport.py" \
+        --repository-root "$REPOSITORY_ROOT" >/dev/null \
+        || die "pinned OpenHands did not produce a local gpt-5.6-sol/xhigh request"
+    ok 'pinned OpenHands gpt-5.6-sol/xhigh transport proof (localhost only)'
+fi
 
 "$SCRIPT_DIR/runtime-image.sh" verify >/dev/null \
     || die "OpenHands runtime is missing or has the wrong immutable identity; run ops/runtime-image.sh ensure"

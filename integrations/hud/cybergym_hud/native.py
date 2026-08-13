@@ -29,6 +29,7 @@ class NativeOpenHandsConfig:
     model: str
     log_dir: Path
     tmp_dir: Path
+    reasoning_effort: Literal["xhigh"] | None = None
     max_iter: int = 10
     timeout: int = 1200
     llm_api_key: str | None = None
@@ -53,11 +54,14 @@ class NativeOpenHandsConfig:
             raise ValueError("max_output_tokens must be positive")
         if self.grader_server_mode not in {"images", "binary"}:
             raise ValueError("grader_server_mode must be images or binary")
+        if self.reasoning_effort is not None and (self.model != "gpt-5.6-sol" or self.reasoning_effort != "xhigh"):
+            raise ValueError("reasoning_effort is supported only as gpt-5.6-sol/xhigh")
         return NativeOpenHandsConfig(
             repository_root=root,
             data_dir=self.data_dir.expanduser().resolve(),
             server=normalize_server(self.server),
             model=self.model,
+            reasoning_effort=self.reasoning_effort,
             log_dir=self.log_dir.expanduser().resolve(),
             tmp_dir=self.tmp_dir.expanduser().resolve(),
             max_iter=self.max_iter,
@@ -85,6 +89,9 @@ class NativeOpenHandsConfig:
         return NativeRunProfile(
             budget_profile=budget_profile,
             model=self.model,
+            reasoning_effort=self.reasoning_effort,
+            reasoning_transport=("gpt56_chat_completions_extra_body" if self.reasoning_effort else "none"),
+            omitted_sampling_parameters=("temperature", "top_p", "stop") if self.reasoning_effort else (),
             max_iter=self.max_iter,
             timeout_seconds=self.timeout,
             max_output_tokens=self.max_output_tokens,
@@ -111,6 +118,29 @@ def load_upstream_openhands(root: Path) -> ModuleType:
     return module
 
 
+class _OpenHandsSubprocessProxy:
+    """Inject compatibility only into the exact pinned OpenHands child."""
+
+    def __init__(self, delegate: ModuleType, *, shim_dir: Path, reasoning_effort: str) -> None:
+        self._delegate = delegate
+        self._shim_dir = shim_dir
+        self._reasoning_effort = reasoning_effort
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._delegate, name)
+
+    def run(self, command: Any, *args: Any, **kwargs: Any) -> Any:
+        normalized = tuple(str(part) for part in command) if isinstance(command, (list, tuple)) else ()
+        marker = ("run", "python", "-m", "openhands.core.main")
+        if len(normalized) < 5 or tuple(normalized[1:5]) != marker:
+            raise RuntimeError(f"refusing to inject reasoning shim into unexpected command: {normalized!r}")
+        child_env = dict(kwargs.get("env") or {})
+        child_env["PYTHONPATH"] = str(self._shim_dir)
+        child_env["CYBERGYM_REASONING_EFFORT"] = self._reasoning_effort
+        kwargs["env"] = child_env
+        return self._delegate.run(command, *args, **kwargs)
+
+
 def execute_upstream_openhands(
     config: NativeOpenHandsConfig,
     binding: NativeTaskBinding,
@@ -132,6 +162,30 @@ def execute_upstream_openhands(
         )
     validate_contract(root=config.repository_root)
     upstream = module or load_upstream_openhands(config.repository_root)
+    original_subprocess = getattr(upstream, "subprocess", None)
+    if config.reasoning_effort:
+        if original_subprocess is None:
+            return NativeReceipt(
+                status="error",
+                task_id=binding.task_id,
+                server=binding.server,
+                run_profile=run_profile,
+                error="pinned upstream runner has no subprocess transport seam",
+            )
+        shim_dir = config.repository_root / "integrations/hud/openhands_shim"
+        if not (shim_dir / "sitecustomize.py").is_file():
+            return NativeReceipt(
+                status="error",
+                task_id=binding.task_id,
+                server=binding.server,
+                run_profile=run_profile,
+                error=f"OpenHands reasoning compatibility shim is missing: {shim_dir}",
+            )
+        upstream.subprocess = _OpenHandsSubprocessProxy(
+            original_subprocess,
+            shim_dir=shim_dir,
+            reasoning_effort=config.reasoning_effort,
+        )
     fresh_uuid = uuid_factory()
     agent_id = fresh_uuid.hex
     run_name = f"{binding.task_id.replace(':', '_')}-{agent_id}"
@@ -184,6 +238,8 @@ def execute_upstream_openhands(
         )
     finally:
         upstream.uuid4 = original_uuid4
+        if config.reasoning_effort:
+            upstream.subprocess = original_subprocess
 
     if returned != agent_id:
         return NativeReceipt(

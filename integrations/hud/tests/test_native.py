@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -17,6 +18,7 @@ from cybergym_hud.env import build_env
 from cybergym_hud.native import (
     NativeOpenHandsAgent,
     NativeOpenHandsConfig,
+    _OpenHandsSubprocessProxy,
     execute_upstream_openhands,
 )
 from cybergym_hud.receipt import NativeReceipt, NativeTaskBinding
@@ -133,6 +135,39 @@ def test_parallel_calls_use_independent_upstream_modules(
 def test_receipt_distinguishes_script_and_paper_budgets(config: NativeOpenHandsConfig) -> None:
     assert replace(config, max_iter=10, timeout=1200).receipt_profile().budget_profile == "script-default-10"
     assert replace(config, max_iter=100, timeout=1200).receipt_profile().budget_profile == "paper-eval-100"
+
+
+def test_gpt56_xhigh_profile_is_validated_and_receipted(config: NativeOpenHandsConfig) -> None:
+    configured = replace(config, model="gpt-5.6-sol", reasoning_effort="xhigh").normalized()
+    profile = configured.receipt_profile()
+    assert profile.model == "gpt-5.6-sol"
+    assert profile.reasoning_effort == "xhigh"
+    assert profile.reasoning_transport == "gpt56_chat_completions_extra_body"
+    assert profile.omitted_sampling_parameters == ("temperature", "top_p", "stop")
+    with pytest.raises(ValueError, match="gpt-5.6-sol/xhigh"):
+        replace(config, reasoning_effort="xhigh").normalized()
+
+
+def test_openhands_subprocess_proxy_injects_only_the_exact_child(tmp_path: Path) -> None:
+    calls = []
+
+    class Delegate:
+        TimeoutExpired = subprocess.TimeoutExpired
+
+        def run(self, command, *args, **kwargs):
+            calls.append((command, args, kwargs))
+            return "done"
+
+    proxy = _OpenHandsSubprocessProxy(Delegate(), shim_dir=tmp_path / "shim", reasoning_effort="xhigh")
+    command = ["/usr/bin/poetry", "run", "python", "-m", "openhands.core.main", "--config-file", "x"]
+    assert proxy.run(command, env={"LLM_API_KEY": "secret"}) == "done"
+    assert calls[0][2]["env"] == {
+        "LLM_API_KEY": "secret",
+        "PYTHONPATH": str(tmp_path / "shim"),
+        "CYBERGYM_REASONING_EFFORT": "xhigh",
+    }
+    with pytest.raises(RuntimeError, match="unexpected command"):
+        proxy.run(["/usr/bin/poetry", "run", "python", "other.py"], env={})
 
 
 @pytest.mark.parametrize("upstream", [FakeUpstream(fail=True), FakeUpstream(return_none=True)])

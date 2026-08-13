@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
+from hud.eval import Job
 from hud.eval.runtime import LocalRuntime
 from hud.settings import settings
 from hud.utils.platform import PlatformClient
@@ -26,6 +27,25 @@ from .taskset import make_taskset
 from .taskset import task_ids as catalog_task_ids
 
 DEFAULT_MAX_CONCURRENT = 15
+
+
+def _validate_job_name(job_name: str | None) -> str | None:
+    """Validate an optional human-facing HUD Job name."""
+
+    if job_name is None:
+        return None
+    if not job_name or job_name != job_name.strip():
+        raise ValueError("job_name must be non-empty with no surrounding whitespace")
+    if len(job_name) > 128 or any(ord(character) < 32 or ord(character) == 127 for character in job_name):
+        raise ValueError("job_name must be at most 128 printable characters")
+    return job_name
+
+
+async def _start_named_job(taskset: Any, job_name: str | None) -> Job | None:
+    name = _validate_job_name(job_name)
+    if name is None:
+        return None
+    return await Job.start(name, taskset_id=taskset.api_id)
 
 
 def _trace_key(value: object) -> str:
@@ -168,7 +188,7 @@ def prepare_tracked_rollout(
     return replace(original, tmp_dir=tracking_root, remove_tmp=False), original.remove_tmp
 
 
-def _summarize_run(run: Any, *, job_id: str) -> dict[str, Any]:
+def _summarize_run(run: Any, *, job_id: str, job_name: str) -> dict[str, Any]:
     receipt: dict[str, Any] | None = None
     if run.trace.content:
         try:
@@ -178,6 +198,7 @@ def _summarize_run(run: Any, *, job_id: str) -> dict[str, Any]:
             receipt = None
     return {
         "job_id": job_id,
+        "job_name": job_name,
         "trace_id": run.trace_id,
         "task_slug": run.slug,
         "status": run.trace.status,
@@ -191,16 +212,17 @@ def _summarize_run(run: Any, *, job_id: str) -> dict[str, Any]:
 def summarize_job(job: Any) -> dict[str, Any]:
     if len(job.runs) != 1:
         raise RuntimeError(f"one-shot scheduler expected one run, got {len(job.runs)}")
-    return _summarize_run(job.runs[0], job_id=job.id)
+    return _summarize_run(job.runs[0], job_id=job.id, job_name=job.name)
 
 
 def summarize_batch_job(job: Any) -> dict[str, Any]:
     """Return one ordered summary while preserving every native run receipt."""
 
-    runs = [_summarize_run(run, job_id=job.id) for run in job.runs]
+    runs = [_summarize_run(run, job_id=job.id, job_name=job.name) for run in job.runs]
     rewards = [float(run["reward"] or 0.0) for run in runs]
     return {
         "job_id": job.id,
+        "job_name": job.name,
         "task_count": len(runs),
         "error_count": sum(bool(run["is_error"]) for run in runs),
         "reward_sum": sum(rewards),
@@ -210,7 +232,12 @@ def summarize_batch_job(job: Any) -> dict[str, Any]:
     }
 
 
-async def run_one(task_id: str, config: NativeOpenHandsConfig) -> dict[str, Any]:
+async def run_one(
+    task_id: str,
+    config: NativeOpenHandsConfig,
+    *,
+    job_name: str | None = None,
+) -> dict[str, Any]:
     config = config.normalized()
     validate_contract(root=config.repository_root)
     rollout_config, cleanup_after_rollout = prepare_tracked_rollout(config)
@@ -221,6 +248,7 @@ async def run_one(task_id: str, config: NativeOpenHandsConfig) -> dict[str, Any]
             selected=[task_id],
             root=rollout_config.repository_root,
         )
+        job = await _start_named_job(taskset, job_name)
         agent = NativeOpenHandsAgent(rollout_config, worker_pool=worker_pool)
         job = await taskset.run(
             agent,
@@ -231,6 +259,7 @@ async def run_one(task_id: str, config: NativeOpenHandsConfig) -> dict[str, Any]
                 )
             ),
             max_concurrent=1,
+            job=job,
         )
         return summarize_job(job)
     finally:
@@ -250,6 +279,7 @@ async def run_many(
     max_concurrent: int = DEFAULT_MAX_CONCURRENT,
     executor: Callable[[NativeOpenHandsConfig, NativeTaskBinding], NativeReceipt] | None = None,
     uuid_factory: Callable[[], UUID] = uuid4,
+    job_name: str | None = None,
 ) -> dict[str, Any]:
     """Run a rolling batch with one isolated upstream configuration per row."""
 
@@ -290,6 +320,7 @@ async def run_many(
                 cleanup_file_tracking_root=cleanup_roots[raw_task_id],
             )
 
+        job = await _start_named_job(taskset, job_name)
         job = await taskset.run(
             NativeOpenHandsBatchAgent(
                 rollout_configs,
@@ -300,6 +331,7 @@ async def run_many(
             # This is the only concurrency controller: HUD releases the next
             # waiting rollout as soon as any active slot completes.
             max_concurrent=max_concurrent,
+            job=job,
         )
         return summarize_batch_job(job)
     finally:
@@ -338,6 +370,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--server", required=True)
     parser.add_argument("--model", required=True)
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=("xhigh",),
+        help="GPT-5.6 Sol reasoning effort (integration transport compatibility)",
+    )
+    parser.add_argument(
+        "--job-name",
+        help="human-facing HUD Job name (default: HUD's task-derived name)",
+    )
     parser.add_argument("--log-dir", type=Path, required=True)
     parser.add_argument("--tmp-dir", type=Path, required=True)
     parser.add_argument("--base-url", default="")
@@ -394,6 +435,7 @@ def main() -> None:
         data_dir=args.data_dir,
         server=args.server,
         model=args.model,
+        reasoning_effort=args.reasoning_effort,
         log_dir=args.log_dir,
         tmp_dir=args.tmp_dir,
         max_iter=args.max_iter,
@@ -409,9 +451,16 @@ def main() -> None:
         debug=args.debug,
     )
     if len(selected) == 1:
-        result = asyncio.run(run_one(selected[0], config))
+        result = asyncio.run(run_one(selected[0], config, job_name=args.job_name))
     else:
-        result = asyncio.run(run_many(selected, config, max_concurrent=args.max_concurrent))
+        result = asyncio.run(
+            run_many(
+                selected,
+                config,
+                max_concurrent=args.max_concurrent,
+                job_name=args.job_name,
+            )
+        )
     result = asyncio.run(verify_and_persist_remote_receipt(result, results_dir=args.log_dir.parent))
     print(json.dumps(result, indent=2, default=str))
     if result["is_error"]:

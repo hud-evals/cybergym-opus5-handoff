@@ -62,6 +62,8 @@ def test_preflight_contains_no_native_model_runner() -> None:
     assert "git-lfs.github.com/spec/v1" in text
     assert 'tar -tzf "$TASK_DATA/repo-vul.tar.gz"' in text
     assert '"$SCRIPT_DIR/runtime-image.sh" verify' in text
+    assert '"$SCRIPT_DIR/verify-reasoning-transport.py"' in text
+    assert "CG_REASONING_EFFORT=xhigh" in text
 
 
 def test_runtime_recovery_uses_exact_official_artifact_and_preserves_upstream_tag(tmp_path: Path) -> None:
@@ -172,6 +174,9 @@ def test_smoke_is_exactly_one_task_and_one_slot() -> None:
     assert "--first-n" not in text
     assert "--max-concurrent 1" in text
     assert "--max-iter 10" in text
+    assert '--job-name "$JOB_NAME"' in text
+    assert '--reasoning-effort "$REASONING_EFFORT"' in text
+    assert "cybergym-gpt5.6-sol" in text
 
 
 def test_committed_env_template_has_names_but_no_secret_values() -> None:
@@ -189,6 +194,9 @@ def test_committed_env_template_has_names_but_no_secret_values() -> None:
         assert secret in assignments
         assert assignments[secret] == ""
     assert assignments["CG_SMOKE_TASK_ID"] == "arvo:10400"
+    assert assignments["CG_MODEL"] == "gpt-5.6-sol"
+    assert assignments["CG_REASONING_EFFORT"] == "xhigh"
+    assert assignments["CG_JOB_NAME"] == "cybergym-gpt5.6-sol"
     assert assignments["CG_SERVER_MODE"] == "images"
     assert assignments["CG_SERVER_BINARY_DIR"] == ""
 

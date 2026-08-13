@@ -33,6 +33,18 @@ serializing concurrent OpenHands runs around shared Python state.
   not presented as a current leaderboard-canonical run.
 - Daytona is not used and no Daytona-fidelity claim is made.
 
+The selected modern model arm is `gpt-5.6-sol` with reasoning effort `xhigh`.
+That model did not exist in the pinned 2025 OpenHands/LiteLLM lock, so this is
+an explicitly reported **model-transport compatibility variance**, not a claim
+that GPT-5.6 was in the paper matrix. An integration-owned `sitecustomize`
+hook affects only the OpenHands child process: it keeps the pinned prompt,
+CodeAct actions, native Docker runtime, and grader unchanged, enables the same
+native function-call representation already supported by that OpenHands
+version, and sends the requested `reasoning_effort=xhigh` through Chat
+Completions `extra_body`. It omits `temperature`, `top_p`, and `stop`, which are
+historical sampling controls rather than supported GPT-5 reasoning controls.
+No protected CyberGym or OpenHands source is edited.
+
 HUD records task setup, the typed native receipt, non-secret model/budget/
 sampling/network settings, upstream grading metadata, reward, errors, and the
 upstream log directory. HUD v6 file tracking also observes a fresh,
@@ -179,6 +191,7 @@ The relevant variables are:
 | Bare `claude-*` model | `ANTHROPIC_API_KEY` |
 | `gpt-*`, `o3*`, or `o4*` model | `OPENAI_API_KEY` |
 | Any other upstream model name | `LLM_API_KEY` |
+| Requested reasoning level for this profile | `CG_REASONING_EFFORT=xhigh` |
 | Operator paths/model/server | non-secret `CG_*` variables in `env.example` |
 
 `HUD_API_KEY` is not automatically reused as a provider key by this
@@ -190,10 +203,13 @@ deliberate: arbitrary `CYBERGYM_*` aliases can collide with the server's
 pydantic settings namespace.
 
 The direct OpenAI smoke profile uses the pinned-upstream-compatible bare model
-name `gpt-4.1-2025-04-14`, `OPENAI_API_KEY`, and an empty
+name `gpt-5.6-sol`, `CG_REASONING_EFFORT=xhigh`, `OPENAI_API_KEY`, and an empty
 `CG_MODEL_BASE_URL`. Do not prefix that name with `openai/`: this old upstream
 wrapper uses a different environment-variable branch for already-prefixed
-names. `DAYTONA_API_KEY` is not used by this native CyberGym path.
+names. The operator smoke passes `--job-name cybergym-gpt5.6-sol`, so that is
+the exact human-facing HUD Job name; the native receipt separately retains the
+actual model, reasoning effort, compatibility transport, and omitted sampling
+parameters. `DAYTONA_API_KEY` is not used by this native CyberGym path.
 
 ### Start the private PoC server
 
@@ -241,7 +257,11 @@ OpenHands build/runtime, the exact smoke task's data and two grader images,
 result-directory permissions, selected image/binary grader bytes, authenticated
 private-server reachability, HUD API authentication, and (for direct OpenAI)
 exact model access. It suppresses secret values and makes no completion/model
-call. Custom provider gateways are presence-checked because their discovery
+call. For GPT-5.6 Sol it also sends one canned request through the real pinned
+OpenHands/LiteLLM stack to a loopback-only fake Chat Completions endpoint and
+requires the captured JSON to contain `reasoning_effort: xhigh` with no
+`temperature`, `top_p`, or `stop`; this proves the actual request route without
+provider spend. Custom provider gateways are presence-checked because their discovery
 endpoints are protocol-specific.
 
 ```bash
@@ -289,6 +309,8 @@ checks:
     --data-dir "$CG_DATA_DIR" \
     --server "$CG_SERVER_URL" \
     --model "$CG_MODEL" \
+    --reasoning-effort "$CG_REASONING_EFFORT" \
+    --job-name "$CG_JOB_NAME" \
     --base-url "$CG_MODEL_BASE_URL" \
     --grader-server-mode "$CG_SERVER_MODE" \
     --log-dir "$CG_RESULTS_DIR/logs" \
@@ -324,6 +346,8 @@ cover the complete catalog:
     --data-dir "$CG_DATA_DIR" \
     --server "$CG_SERVER_URL" \
     --model "$CG_MODEL" \
+    --reasoning-effort "$CG_REASONING_EFFORT" \
+    --job-name "$CG_JOB_NAME" \
     --base-url "$CG_MODEL_BASE_URL" \
     --grader-server-mode "$CG_SERVER_MODE" \
     --log-dir "$CG_RESULTS_DIR/logs" \

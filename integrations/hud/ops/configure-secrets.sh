@@ -121,7 +121,9 @@ runner = {
     "OPENAI_API_KEY": openai_key,
     "CG_DATA_DIR": "/srv/cybergym/cybergym-data/data",
     "CG_SERVER_URL": "http://172.17.0.1:8666",
-    "CG_MODEL": "gpt-4.1-2025-04-14",
+    "CG_MODEL": "gpt-5.6-sol",
+    "CG_REASONING_EFFORT": "xhigh",
+    "CG_JOB_NAME": "cybergym-gpt5.6-sol",
     "CG_MODEL_BASE_URL": "",
     "CG_SMOKE_TASK_ID": "arvo:10400",
 }

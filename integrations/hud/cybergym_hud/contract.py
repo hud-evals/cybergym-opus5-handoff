@@ -129,6 +129,24 @@ def validate_contract(
         "isolated_upstream_module_per_rollout": True,
     }:
         raise ValueError("native batch scheduling must remain a rolling HUD semaphore capped at 15")
+    modern_model = runtime["modern_model_profile"]
+    if modern_model != {
+        "label": "upstream-openhands-0.33-gpt-5.6-sol-xhigh-transport-compatibility",
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "xhigh",
+        "endpoint": "openai_chat_completions",
+        "injection": "integration_owned_sitecustomize_extra_body_reasoning_effort",
+        "native_function_calling_enabled": True,
+        "transport_omits": ["temperature", "top_p", "stop"],
+        "protected_upstream_sources_modified": False,
+        "shim_sha256": {
+            "openhands_shim/sitecustomize.py": "8a48e652a9cbb1d1e40cc0d2922b44e434c011442045d1a7ea67bbb2518a7fc2",
+            "openhands_shim/_cybergym_openhands_compat.py": (
+                "5de086b32c4618d9de9d91c5a6972817adc3d38b404e52fda14afe8fa6f7b8a2"
+            ),
+        },
+    }:
+        raise ValueError("modern model compatibility profile drifted")
     if runtime["agent_id"] != "fresh_uuid4_per_rollout":
         raise ValueError("each rollout must use a fresh upstream agent ID")
     if runtime["grader_server_profiles"] != {
@@ -157,6 +175,10 @@ def validate_contract(
     if not check_sources:
         return
     checkout = repository_root(root)
+    for relative, expected in modern_model["shim_sha256"].items():
+        path = checkout / "integrations/hud" / relative
+        if not path.is_file() or _sha256(path) != expected:
+            raise ValueError(f"modern model compatibility shim drifted: {relative}")
     merge_base = _git(checkout, "merge-base", "HEAD", PINNED_UPSTREAM_COMMIT)
     if merge_base != PINNED_UPSTREAM_COMMIT:
         raise ValueError("checkout is not based on the pinned upstream commit")

@@ -30,7 +30,7 @@ build-backend = "hatchling.build"
 packages = ["cybergym_hud"]
 
 [tool.hatch.build.targets.sdist]
-include = ["cybergym_hud", "ops", "README.md", "pyproject.toml"]
+include = ["cybergym_hud", "openhands_shim", "ops", "README.md", "pyproject.toml"]
 
 [tool.uv.sources]
 cybergym = { path = "../..", editable = true }
