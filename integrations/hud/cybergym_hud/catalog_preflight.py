@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import stat
 import subprocess
 import tarfile
 from collections.abc import Callable
@@ -94,6 +95,20 @@ class CatalogPreflightError(RuntimeError):
     pass
 
 
+def _source_metadata_file_is_protected(path: Path, *, require_root_owner: bool) -> bool:
+    try:
+        stat_result = path.lstat()
+        xattrs = os.listxattr(path, follow_symlinks=False)
+    except (AttributeError, OSError):
+        return False
+    return (
+        stat.S_ISREG(stat_result.st_mode)
+        and not stat_result.st_mode & 0o022
+        and (not require_root_owner or stat_result.st_uid == 0)
+        and not any(name in {"system.posix_acl_access", "system.posix_acl_default"} for name in xattrs)
+    )
+
+
 def _load_source_provenance(
     path: Path,
     *,
@@ -102,12 +117,9 @@ def _load_source_provenance(
 ) -> tuple[dict[str, str], dict[str, Any]]:
     """Load the frozen selective-HF manifest and return expected Level-1 hashes."""
 
-    if (
-        not path.is_file()
-        or path.is_symlink()
-        or path.stat().st_mode & 0o022
-        or (require_root_owner and path.stat().st_uid != 0)
-    ):
+    if require_root_owner:
+        _require_root_controlled_ancestors(path)
+    if not _source_metadata_file_is_protected(path, require_root_owner=require_root_owner):
         raise CatalogPreflightError(f"source provenance must be a non-symlink, non-writable file: {path}")
     try:
         provenance_bytes = path.read_bytes()
@@ -115,11 +127,11 @@ def _load_source_provenance(
         manifest_path = Path(provenance["selected_manifest"])
         if manifest_path.resolve().parent != path.resolve().parent:
             raise ValueError("selected manifest must be colocated with provenance")
-        if (
-            not manifest_path.is_file()
-            or manifest_path.is_symlink()
-            or manifest_path.stat().st_mode & 0o022
-            or (require_root_owner and manifest_path.stat().st_uid != 0)
+        if require_root_owner:
+            _require_root_controlled_ancestors(manifest_path)
+        if not _source_metadata_file_is_protected(
+            manifest_path,
+            require_root_owner=require_root_owner,
         ):
             raise ValueError("selected manifest is missing, symlinked, or writable")
         manifest_bytes = manifest_path.read_bytes()

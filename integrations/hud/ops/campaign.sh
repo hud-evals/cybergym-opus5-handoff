@@ -17,6 +17,7 @@ REASONING_EFFORT=${CG_REASONING_EFFORT:-xhigh}
 JOB_NAME=${CG_JOB_NAME:-cybergym-gpt5.6-sol}
 MAX_CONCURRENT=${CG_CAMPAIGN_MAX_CONCURRENT:-1}
 SHARD_SIZE=${CG_CAMPAIGN_SHARD_SIZE:-12}
+UV_BIN=${CG_UV_BIN:-uv}
 CONFIRM_PAID_ALL=0
 CONTINUE_AFTER_ERRORS=0
 
@@ -89,7 +90,7 @@ esac
     --repository-root "$REPOSITORY_ROOT" \
     --max-concurrent "$MAX_CONCURRENT"
 
-set -- uv run --project "$REPOSITORY_ROOT/integrations/hud" cybergym-hud-run-campaign \
+set -- "$UV_BIN" run --project "$REPOSITORY_ROOT/integrations/hud" cybergym-hud-run-campaign \
     --all --confirm-paid-all \
     --repository-root "$REPOSITORY_ROOT" \
     --data-dir "$DATA_DIR" \

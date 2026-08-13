@@ -72,7 +72,11 @@ def test_binary_runner_images_are_exact_linux_amd64_snapshots() -> None:
     ]
 
 
-def test_source_provenance_is_pinned_and_manifest_hash_verified(tmp_path: Path) -> None:
+def test_source_provenance_is_pinned_and_manifest_hash_verified(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(os, "listxattr", lambda *_args, **_kwargs: [], raising=False)
     data_root = tmp_path / "cybergym-data"
     data_dir = data_root / "data"
     provenance_dir = tmp_path / "provenance"
@@ -119,11 +123,63 @@ def test_source_provenance_is_pinned_and_manifest_hash_verified(tmp_path: Path) 
     assert len(hashes) == 3_014
     assert fields["source_revision"] == provenance["revision"]
 
+    real_listxattr = os.listxattr
+    monkeypatch.setattr(
+        os,
+        "listxattr",
+        lambda path, **kwargs: (
+            ["system.posix_acl_access"] if Path(path) == manifest_path else real_listxattr(path, **kwargs)
+        ),
+    )
+    with pytest.raises(CatalogPreflightError, match="malformed"):
+        _load_source_provenance(provenance_path, data_dir=data_dir, require_root_owner=False)
+    monkeypatch.setattr(os, "listxattr", real_listxattr)
+
     manifest_path.chmod(0o640)
     manifest_path.write_text("{}", encoding="utf-8")
     manifest_path.chmod(0o440)
     with pytest.raises(CatalogPreflightError, match="does not match"):
         _load_source_provenance(provenance_path, data_dir=data_dir, require_root_owner=False)
+
+
+def test_source_provenance_rejects_replaceable_parent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    provenance_path = tmp_path / "replaceable" / "PROVENANCE.json"
+    provenance_path.parent.mkdir()
+    provenance_path.write_text("{}", encoding="utf-8")
+
+    def reject_ancestors(path: Path) -> None:
+        assert path == provenance_path
+        raise CatalogPreflightError("protected data ancestor is replaceable")
+
+    monkeypatch.setattr(
+        "cybergym_hud.catalog_preflight._require_root_controlled_ancestors",
+        reject_ancestors,
+    )
+    with pytest.raises(CatalogPreflightError, match="ancestor is replaceable"):
+        _load_source_provenance(provenance_path, data_dir=tmp_path / "data")
+
+
+def test_source_provenance_rejects_file_access_acl(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    provenance_path = tmp_path / "PROVENANCE.json"
+    provenance_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        os,
+        "listxattr",
+        lambda path, **_kwargs: ["system.posix_acl_access"] if Path(path) == provenance_path else [],
+        raising=False,
+    )
+    with pytest.raises(CatalogPreflightError, match="non-symlink, non-writable"):
+        _load_source_provenance(
+            provenance_path,
+            data_dir=tmp_path / "data",
+            require_root_owner=False,
+        )
 
 
 def test_live_server_attestation_binds_mode_checkout_and_endpoint(

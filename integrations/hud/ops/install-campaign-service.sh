@@ -42,10 +42,13 @@ for path in /etc/cybergym/server.env /etc/cybergym/runner.env; do
 done
 systemctl is-active --quiet cybergym-server.service \
     || { printf '%s\n' 'install-campaign-service: CyberGym server is not active' >&2; exit 1; }
+OPERATOR_PATH=/home/$OPERATOR/.local/bin:/usr/local/bin:/usr/bin:/bin
+POETRY_CACHE_DIR=/srv/cybergym-runtime/cache/poetry
 
 # This is the final no-spend boundary. Run it with the same user/groups and
 # external environment files as the paid service.
 runuser -u "$OPERATOR" -- \
+    env HOME="/home/$OPERATOR" PATH="$OPERATOR_PATH" POETRY_CACHE_DIR="$POETRY_CACHE_DIR" \
     "$REPOSITORY_ROOT/integrations/hud/ops/cybergym-ops" \
     campaign-preflight --max-concurrent 4 --repository-root "$REPOSITORY_ROOT"
 
@@ -65,6 +68,9 @@ User=$OPERATOR
 Group=$OPERATOR
 SupplementaryGroups=docker
 WorkingDirectory=$REPOSITORY_ROOT
+Environment=HOME=/home/$OPERATOR
+Environment=PATH=$OPERATOR_PATH
+Environment=POETRY_CACHE_DIR=$POETRY_CACHE_DIR
 ExecStart=$REPOSITORY_ROOT/integrations/hud/ops/cybergym-ops campaign --confirm-paid-all --max-concurrent 4 --shard-size 12
 # Resume after a host reboot or abnormal signal, but never loop on an explicit
 # campaign/preflight error. The operator inspects and restarts those manually.

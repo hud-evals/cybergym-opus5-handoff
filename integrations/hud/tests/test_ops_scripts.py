@@ -190,7 +190,10 @@ def test_campaign_profile_resume_and_secret_boundaries_are_explicit() -> None:
         "cybergym-hud-run-campaign",
     ):
         assert expected in campaign
-    assert "CG_MODEL_BASE_URL" not in campaign.split("set -- uv", 1)[1]
+    assert "CG_MODEL_BASE_URL" not in campaign.split('set -- "$UV_BIN"', 1)[1]
+    assert "UV_BIN=${CG_UV_BIN:-uv}" in campaign
+    assert 'set -- "$UV_BIN" run' in campaign
+    assert 'set -- "$UV_BIN" run' in preflight
     assert "OPENAI_API_KEY" not in campaign
     assert "HUD_API_KEY" not in campaign
     assert "CYBERGYM_API_KEY" not in campaign
@@ -198,6 +201,16 @@ def test_campaign_profile_resume_and_secret_boundaries_are_explicit() -> None:
     assert "full-corpus-preflight.json" in preflight
     assert "campaign-preflight" in dispatcher
     assert 'exec "$SCRIPT_DIR/campaign.sh"' in dispatcher
+
+
+def test_campaign_service_uses_a_deterministic_operator_path() -> None:
+    installer = (OPS / "install-campaign-service.sh").read_text(encoding="utf-8")
+    assert "OPERATOR_PATH=/home/$OPERATOR/.local/bin:/usr/local/bin:/usr/bin:/bin" in installer
+    assert "POETRY_CACHE_DIR=/srv/cybergym-runtime/cache/poetry" in installer
+    assert 'env HOME="/home/$OPERATOR" PATH="$OPERATOR_PATH" POETRY_CACHE_DIR="$POETRY_CACHE_DIR"' in installer
+    assert "Environment=HOME=/home/$OPERATOR" in installer
+    assert "Environment=PATH=$OPERATOR_PATH" in installer
+    assert "Environment=POETRY_CACHE_DIR=$POETRY_CACHE_DIR" in installer
 
 
 def test_smoke_is_exactly_one_task_and_one_slot() -> None:
