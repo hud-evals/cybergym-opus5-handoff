@@ -21,6 +21,19 @@ CPU_PER_ROLLOUT = 4
 MEMORY_PER_ROLLOUT_BYTES = 8 * 1024**3
 HOST_MEMORY_RESERVE_BYTES = 2 * 1024**3
 
+# The published binary-only corpus contains these six links. They are nested in
+# directories that the upstream server bind-mounts at /out, so Docker preserves
+# the absolute container path instead of resolving it on the host. Keep this an
+# exact path-and-target allowlist: no other absolute grader-tree link is trusted.
+_REVIEWED_CONTAINER_ABSOLUTE_SYMLINKS = {
+    "arvo/60121/fix/out/oss-fuzz-zeek-scripts/tests": "/src/zeek/build/install-root/share/btest/data",
+    "arvo/62356/fix/out/oss-fuzz-zeek-scripts/tests": "/src/zeek/build/install-root/share/btest/data",
+    "arvo/65933/fix/out/oss-fuzz-zeek-scripts/tests": "/src/zeek/build/install-root/share/btest/data",
+    "arvo/65933/vul/out/oss-fuzz-zeek-scripts/tests": "/src/zeek/build/install-root/share/btest/data",
+    "arvo/66066/fix/out/oss-fuzz-zeek-scripts/tests": "/src/zeek/build/install-root/share/btest/data",
+    "arvo/66066/vul/out/oss-fuzz-zeek-scripts/tests": "/src/zeek/build/install-root/share/btest/data",
+}
+
 
 class CatalogPreflightError(RuntimeError):
     pass
@@ -67,6 +80,60 @@ def _tree_digest(root: Path) -> str:
         else:
             digest.update(b"other\n")
     return digest.hexdigest()
+
+
+def _validate_binary_tree_symlinks(root: Path) -> tuple[dict[str, int], list[str]]:
+    """Validate contained relative links and the published container-only links."""
+
+    counts = {"total": 0, "relative": 0, "reviewed_absolute": 0}
+    errors: list[str] = []
+    if not root.is_dir():
+        return counts, errors
+
+    root_resolved = root.resolve(strict=True)
+    links = sorted(
+        (path for path in root.rglob("*") if path.is_symlink()),
+        key=lambda item: item.relative_to(root).as_posix(),
+    )
+    counts["total"] = len(links)
+    for path in links:
+        relative = path.relative_to(root).as_posix()
+        try:
+            raw_target = os.readlink(path)
+        except OSError:
+            errors.append(f"unreadable binary grader symlink: {relative}")
+            continue
+        target = Path(raw_target)
+        if target.is_absolute():
+            expected = _REVIEWED_CONTAINER_ABSOLUTE_SYMLINKS.get(relative)
+            if expected != raw_target:
+                errors.append(f"unsupported absolute binary grader symlink: {relative} -> {raw_target}")
+                continue
+            counts["reviewed_absolute"] += 1
+            continue
+
+        candidate = path.parent / target
+        try:
+            non_strict_target = candidate.resolve(strict=False)
+            non_strict_target.relative_to(root_resolved)
+        except (OSError, RuntimeError, ValueError):
+            errors.append(f"escaping relative binary grader symlink: {relative} -> {raw_target}")
+            continue
+        try:
+            resolved_target = candidate.resolve(strict=True)
+        except (FileNotFoundError, OSError, RuntimeError):
+            errors.append(f"broken relative binary grader symlink: {relative} -> {raw_target}")
+            continue
+        try:
+            resolved_target.relative_to(root_resolved)
+        except ValueError:
+            errors.append(f"escaping relative binary grader symlink: {relative} -> {raw_target}")
+            continue
+        if not (resolved_target.is_file() or resolved_target.is_dir()):
+            errors.append(f"unsupported relative binary grader symlink target: {relative} -> {raw_target}")
+            continue
+        counts["relative"] += 1
+    return counts, errors
 
 
 def _validate_capacity(*, max_concurrent: int, cpu_count: int, memory_bytes: int) -> dict[str, int]:
@@ -184,12 +251,10 @@ def validate_full_catalog(
                     errors.append(f"missing binary output directory: {task_id}/{variant}")
             image_refs.add("cybergym/oss-fuzz-base-runner:latest")
 
+    symlink_counts = {"total": 0, "relative": 0, "reviewed_absolute": 0}
     if server_mode == "binary" and server_binary_dir is not None:
-        symlinks = [path for path in server_binary_dir.rglob("*") if path.is_symlink()]
-        errors.extend(
-            f"binary grader tree contains unsupported symlink: {path.relative_to(server_binary_dir)}"
-            for path in symlinks
-        )
+        symlink_counts, symlink_errors = _validate_binary_tree_symlinks(server_binary_dir)
+        errors.extend(symlink_errors)
 
     image_identities = {ref: image_identity(ref) for ref in sorted(image_refs)}
     missing_images = sorted(ref for ref, identity in image_identities.items() if identity is None)
@@ -217,6 +282,9 @@ def validate_full_catalog(
         "validated_tar_count": tar_count,
         "grader_server_mode": server_mode,
         "validated_image_count": len(image_refs),
+        "validated_binary_symlink_count": symlink_counts["total"],
+        "validated_relative_binary_symlink_count": symlink_counts["relative"],
+        "validated_reviewed_absolute_binary_symlink_count": symlink_counts["reviewed_absolute"],
         "max_concurrent": max_concurrent,
         "capacity": capacity,
     }

@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from cybergym_hud.catalog_preflight import CatalogPreflightError, validate_full_catalog
+from cybergym_hud.catalog_preflight import (
+    CatalogPreflightError,
+    _tree_digest,
+    _validate_binary_tree_symlinks,
+    validate_full_catalog,
+)
 
 
 def _write_task(data_dir: Path, task_id: str) -> None:
@@ -91,3 +96,89 @@ def test_capacity_gate_rejects_two_rollouts_on_a_16_gib_worker(
             cpu_count=8,
             memory_bytes=16 * 1024**3,
         )
+
+
+def test_binary_symlink_validation_accepts_contained_relative_links(tmp_path: Path) -> None:
+    root = tmp_path / "grader"
+    target = root / "arvo" / "1" / "vul" / "out" / "lib" / "libexample.so.1"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"library")
+    link = target.with_name("libexample.so")
+    link.symlink_to(target.name)
+
+    counts, errors = _validate_binary_tree_symlinks(root)
+
+    assert errors == []
+    assert counts == {"total": 1, "relative": 1, "reviewed_absolute": 0}
+
+
+def test_binary_symlink_validation_rejects_broken_relative_links(tmp_path: Path) -> None:
+    root = tmp_path / "grader"
+    link = root / "arvo" / "1" / "vul" / "out" / "libexample.so"
+    link.parent.mkdir(parents=True)
+    link.symlink_to("missing.so")
+
+    counts, errors = _validate_binary_tree_symlinks(root)
+
+    assert counts == {"total": 1, "relative": 0, "reviewed_absolute": 0}
+    assert errors == ["broken relative binary grader symlink: arvo/1/vul/out/libexample.so -> missing.so"]
+
+
+def test_binary_symlink_validation_rejects_relative_escape(tmp_path: Path) -> None:
+    root = tmp_path / "grader"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.write_bytes(b"outside")
+    link = root / "escape"
+    link.symlink_to("../outside")
+
+    counts, errors = _validate_binary_tree_symlinks(root)
+
+    assert counts == {"total": 1, "relative": 0, "reviewed_absolute": 0}
+    assert errors == ["escaping relative binary grader symlink: escape -> ../outside"]
+
+
+def test_binary_symlink_validation_accepts_only_reviewed_absolute_link(tmp_path: Path) -> None:
+    root = tmp_path / "grader"
+    reviewed = root / "arvo" / "60121" / "fix" / "out" / "oss-fuzz-zeek-scripts" / "tests"
+    reviewed.parent.mkdir(parents=True)
+    reviewed.symlink_to("/src/zeek/build/install-root/share/btest/data")
+
+    counts, errors = _validate_binary_tree_symlinks(root)
+
+    assert errors == []
+    assert counts == {"total": 1, "relative": 0, "reviewed_absolute": 1}
+
+    reviewed.unlink()
+    reviewed.symlink_to("/src/unreviewed")
+    counts, errors = _validate_binary_tree_symlinks(root)
+    assert counts == {"total": 1, "relative": 0, "reviewed_absolute": 0}
+    assert errors == [
+        "unsupported absolute binary grader symlink: arvo/60121/fix/out/oss-fuzz-zeek-scripts/tests -> /src/unreviewed"
+    ]
+
+    reviewed.unlink()
+    unreviewed = root / "arvo" / "60121" / "vul" / "out" / "oss-fuzz-zeek-scripts" / "tests"
+    unreviewed.parent.mkdir(parents=True)
+    unreviewed.symlink_to("/src/zeek/build/install-root/share/btest/data")
+    counts, errors = _validate_binary_tree_symlinks(root)
+    assert counts == {"total": 1, "relative": 0, "reviewed_absolute": 0}
+    assert errors == [
+        "unsupported absolute binary grader symlink: "
+        "arvo/60121/vul/out/oss-fuzz-zeek-scripts/tests -> /src/zeek/build/install-root/share/btest/data"
+    ]
+
+
+def test_binary_tree_fingerprint_includes_symlink_target_metadata(tmp_path: Path) -> None:
+    root = tmp_path / "grader"
+    root.mkdir()
+    (root / "first").write_bytes(b"same bytes")
+    (root / "second").write_bytes(b"same bytes")
+    link = root / "selected"
+    link.symlink_to("first")
+    first_digest = _tree_digest(root)
+
+    link.unlink()
+    link.symlink_to("second")
+
+    assert _tree_digest(root) != first_digest
