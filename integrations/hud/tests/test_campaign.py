@@ -14,6 +14,8 @@ from cybergym_hud.campaign import (
     _campaign_identity,
     campaign_lock,
     reconcile_running_attempt,
+    require_remote_job_receipt,
+    require_remote_trace_enter,
     run_campaign,
     validate_campaign_profile,
 )
@@ -32,6 +34,10 @@ def _config(tmp_path: Path) -> NativeOpenHandsConfig:
         tmp_dir=tmp_path / "results/tmp",
         max_iter=200,
         timeout=3600,
+        silent=True,
+        runtime_nano_cpus=4_000_000_000,
+        runtime_memory_bytes=8 * 1024**3,
+        runtime_memory_swap_bytes=8 * 1024**3,
     ).normalized()
 
 
@@ -99,6 +105,10 @@ async def test_campaign_checkpoints_small_named_jobs_and_restart_skips_paid_task
         jobs.append(job)
         return job
 
+    async def job_receipt_verifier(job, *, client=None):
+        assert client is None
+        assert job in jobs
+
     def native_executor(rollout_config, binding):
         launched.append(binding.task_id)
         return NativeReceipt(
@@ -110,8 +120,18 @@ async def test_campaign_checkpoints_small_named_jobs_and_restart_skips_paid_task
             upstream_returned_agent_id="a" * 32,
         )
 
-    async def batch_runner(task_ids, rollout_config, *, executor, job_name, job, **_kwargs):
+    async def batch_runner(
+        task_ids,
+        rollout_config,
+        *,
+        executor,
+        job_name,
+        job,
+        prelaunch_verifier,
+        **_kwargs,
+    ):
         assert job_name == CAMPAIGN_JOB_NAME == job.name
+        assert callable(prelaunch_verifier)
         runs = []
         for task_id in task_ids:
             receipt = executor(
@@ -151,6 +171,7 @@ async def test_campaign_checkpoints_small_named_jobs_and_restart_skips_paid_task
         shard_size=2,
         confirm_paid_all=True,
         job_factory=job_factory,
+        job_receipt_verifier=job_receipt_verifier,
         batch_runner=batch_runner,
         receipt_verifier=receipt_verifier,
         native_executor=native_executor,
@@ -172,6 +193,7 @@ async def test_campaign_checkpoints_small_named_jobs_and_restart_skips_paid_task
         shard_size=2,
         confirm_paid_all=True,
         job_factory=forbidden_job_factory,
+        job_receipt_verifier=job_receipt_verifier,
         batch_runner=batch_runner,
         receipt_verifier=receipt_verifier,
         native_executor=native_executor,
@@ -179,6 +201,76 @@ async def test_campaign_checkpoints_small_named_jobs_and_restart_skips_paid_task
     )
     assert resumed["complete"] is True
     assert launched == list(ids)
+
+
+@pytest.mark.asyncio
+async def test_paid_job_must_be_remotely_acknowledged_before_launch() -> None:
+    job = SimpleNamespace(id="a" * 32, name=CAMPAIGN_JOB_NAME)
+
+    class Client:
+        async def aget(self, path, *, params=None):
+            if path.endswith("/traces"):
+                assert params == {"limit": 1, "offset": 0}
+                return {"items": []}
+            assert path == f"/jobs/{job.id}" and params is None
+            return {
+                "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "name": CAMPAIGN_JOB_NAME,
+                "can_edit": True,
+                "group_size": 1,
+                "taskset_id": None,
+            }
+
+    await require_remote_job_receipt(job, client=Client())
+
+    class WrongNameClient:
+        async def aget(self, _path, *, params=None):
+            assert params is None
+            return {
+                "id": job.id,
+                "name": "wrong",
+                "can_edit": True,
+                "group_size": 1,
+                "taskset_id": None,
+            }
+
+    with pytest.raises(CampaignBlocked, match="did not acknowledge"):
+        await require_remote_job_receipt(job, client=WrongNameClient())
+
+
+@pytest.mark.asyncio
+async def test_paid_trace_must_be_remotely_acknowledged_with_exact_slug(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trace_id = "b" * 32
+
+    class Client:
+        async def aget(self, path, *, params=None):
+            assert path == "/jobs/job-1/traces"
+            assert params == {"limit": 1000, "offset": 0}
+            return {
+                "items": [
+                    {
+                        "id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                        "task_slug": "arvo-1",
+                    }
+                ]
+            }
+
+    await require_remote_trace_enter("job-1", trace_id, "arvo:1", client=Client())
+
+    class WrongSlugClient(Client):
+        async def aget(self, path, *, params=None):
+            rows = await super().aget(path, params=params)
+            rows["items"][0]["task_slug"] = "arvo-2"
+            return rows
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr("cybergym_hud.campaign.asyncio.sleep", no_sleep)
+    with pytest.raises(CampaignBlocked, match="mismatched task slug"):
+        await require_remote_trace_enter("job-1", trace_id, "arvo:1", client=WrongSlugClient())
 
 
 @pytest.mark.asyncio
@@ -211,12 +303,71 @@ async def test_restart_recovers_terminal_rows_and_leaves_unlaunched_rows_pending
                     "task_slug": "arvo-1",
                     "status": "completed",
                     "reward": 0.0,
+                    "evaluation_result": {"isError": False},
                 }
             ]
 
     await reconcile_running_attempt(state, 0, state.shard(0)["attempts"][0], client=Client())
     assert state.shard(0)["completed_task_ids"] == ["arvo:1"]
     assert state.pending_task_ids(0) == ("arvo:2",)
+
+
+@pytest.mark.asyncio
+async def test_restart_does_not_mark_prelaunch_remote_trace_complete(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    ids = ("arvo:1",)
+    state = CampaignState(tmp_path / "state")
+    state.state_dir.mkdir(mode=0o700)
+    state.initialize(identity=_campaign_identity(config, ids, 1), task_ids=ids, shard_size=1)
+    state.start_attempt(
+        0,
+        job=SimpleNamespace(id="job-1", name=CAMPAIGN_JOB_NAME),
+        task_ids=ids,
+        max_concurrent=1,
+    )
+
+    class Client:
+        async def aget(self, _path, *, params=None):
+            assert params == {"limit": 1000, "offset": 0}
+            return [{"id": "trace-1", "task_slug": "arvo-1", "status": "error", "reward": 0.0}]
+
+    await reconcile_running_attempt(state, 0, state.shard(0)["attempts"][0], client=Client())
+    assert state.shard(0)["completed_task_ids"] == []
+    assert state.pending_task_ids(0) == ids
+
+
+@pytest.mark.asyncio
+async def test_restart_halts_on_completed_trace_with_remote_grader_error(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    ids = ("arvo:1",)
+    state = CampaignState(tmp_path / "state")
+    state.state_dir.mkdir(mode=0o700)
+    state.initialize(identity=_campaign_identity(config, ids, 1), task_ids=ids, shard_size=1)
+    attempt_number = state.start_attempt(
+        0,
+        job=SimpleNamespace(id="job-1", name=CAMPAIGN_JOB_NAME),
+        task_ids=ids,
+        max_concurrent=1,
+    )
+    state.mark_launched(0, attempt_number, "arvo:1")
+
+    class Client:
+        async def aget(self, path, *, params=None):
+            if path == "/trace/trace-1/events":
+                return {"events": [{"type": "span"}]}
+            return [
+                {
+                    "id": "trace-1",
+                    "task_slug": "arvo-1",
+                    "status": "completed",
+                    "reward": 0.0,
+                    "metadata": {"evaluation_result": {"isError": True}},
+                }
+            ]
+
+    await reconcile_running_attempt(state, 0, state.shard(0)["attempts"][0], client=Client())
+    assert state.payload["halt"]["job_id"] == "job-1"
+    assert state.shard(0)["status"] == "verified_with_errors"
 
 
 @pytest.mark.asyncio

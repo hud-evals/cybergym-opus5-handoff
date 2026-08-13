@@ -58,6 +58,19 @@ def _trace_key(value: object) -> str:
         return rendered
 
 
+def _remote_evaluation_succeeded(row: dict[str, Any]) -> bool:
+    evaluation = row.get("evaluation_result")
+    if evaluation is None:
+        metadata = row.get("metadata")
+        evaluation = metadata.get("evaluation_result") if isinstance(metadata, dict) else None
+    if not isinstance(evaluation, dict):
+        return False
+    marker = evaluation.get("isError")
+    if marker is None:
+        marker = evaluation.get("is_error")
+    return marker is False
+
+
 async def require_remote_hud_receipt(job_id: str, trace_ids: tuple[str, ...]) -> tuple[str, ...]:
     """Fail closed unless HUD exposes terminal, rewarded rows and events."""
 
@@ -87,7 +100,9 @@ async def require_remote_hud_receipt(job_id: str, trace_ids: tuple[str, ...]) ->
         terminal = {
             trace_id
             for trace_id, (_remote_id, row) in remote.items()
-            if row.get("status") in {"completed", "error", "cancelled"} and row.get("reward") is not None
+            if row.get("status") in {"completed", "error", "cancelled"}
+            and row.get("reward") is not None
+            and _remote_evaluation_succeeded(row)
         }
         if expected.issubset(terminal):
             break
@@ -140,6 +155,14 @@ def write_summary(path: Path, payload: dict[str, Any]) -> None:
     finally:
         os.close(descriptor)
     os.replace(temporary, path)
+    # The file fsync above only makes the temporary inode durable. Persist the
+    # rename itself before a caller treats this as a paid-call checkpoint.
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory = os.open(path.parent, directory_flags)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 async def verify_and_persist_remote_receipt(result: dict[str, Any], *, results_dir: Path) -> dict[str, Any]:
@@ -281,6 +304,7 @@ async def run_many(
     uuid_factory: Callable[[], UUID] = uuid4,
     job_name: str | None = None,
     job: Job | None = None,
+    prelaunch_verifier: Callable[[str, str], Any] | None = None,
 ) -> dict[str, Any]:
     """Run a rolling batch with one isolated upstream configuration per row."""
 
@@ -330,6 +354,7 @@ async def run_many(
                 rollout_configs,
                 executor=executor,
                 worker_pool=worker_pool,
+                prelaunch_verifier=prelaunch_verifier,
             ),
             runtime=LocalRuntime(environment_for),
             # This is the only concurrency controller: HUD releases the next

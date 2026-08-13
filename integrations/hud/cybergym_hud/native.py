@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import os
 import re
 import stat
-from collections.abc import Callable, Mapping
+import tomllib
+from collections.abc import Awaitable, Callable, Mapping
 from concurrent.futures import Executor
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,12 +17,18 @@ from types import ModuleType
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
+import tomli_w
 from hud.agents.base import Agent
+from hud.telemetry.context import get_current_trace_id
 from hud.types import Step
 
 from .contract import repository_root, validate_contract
 from .receipt import NativeReceipt, NativeRunProfile, NativeTaskBinding, normalize_server
 from .upstream import require_upstream_agent_checkout
+
+CAMPAIGN_RUNTIME_NANO_CPUS = 4_000_000_000
+CAMPAIGN_RUNTIME_MEMORY_BYTES = 8 * 1024**3
+CAMPAIGN_RUNTIME_MEMORY_SWAP_BYTES = CAMPAIGN_RUNTIME_MEMORY_BYTES
 
 _MAX_ITERATION_REASON = re.compile(
     r"^RuntimeError: Agent reached maximum iteration in headless mode\. "
@@ -50,6 +58,9 @@ class NativeOpenHandsConfig:
     silent: bool = False
     remove_tmp: bool = True
     debug: bool = False
+    runtime_nano_cpus: int | None = None
+    runtime_memory_bytes: int | None = None
+    runtime_memory_swap_bytes: int | None = None
 
     def normalized(self) -> NativeOpenHandsConfig:
         root = repository_root(self.repository_root)
@@ -63,6 +74,20 @@ class NativeOpenHandsConfig:
             raise ValueError("grader_server_mode must be images or binary")
         if self.reasoning_effort is not None and (self.model != "gpt-5.6-sol" or self.reasoning_effort != "xhigh"):
             raise ValueError("reasoning_effort is supported only as gpt-5.6-sol/xhigh")
+        runtime_limits = (
+            self.runtime_nano_cpus,
+            self.runtime_memory_bytes,
+            self.runtime_memory_swap_bytes,
+        )
+        if any(value is not None for value in runtime_limits):
+            if not all(isinstance(value, int) and value > 0 for value in runtime_limits):
+                raise ValueError("runtime CPU, memory, and memory+swap limits must be positive integers together")
+            memory_bytes = self.runtime_memory_bytes
+            memory_swap_bytes = self.runtime_memory_swap_bytes
+            if not isinstance(memory_bytes, int) or not isinstance(memory_swap_bytes, int):
+                raise ValueError("runtime CPU, memory, and memory+swap limits must be positive integers together")
+            if memory_swap_bytes < memory_bytes:
+                raise ValueError("runtime memory+swap limit may not be lower than the memory limit")
         return NativeOpenHandsConfig(
             repository_root=root,
             data_dir=self.data_dir.expanduser().resolve(),
@@ -84,6 +109,9 @@ class NativeOpenHandsConfig:
             silent=self.silent,
             remove_tmp=self.remove_tmp,
             debug=self.debug,
+            runtime_nano_cpus=self.runtime_nano_cpus,
+            runtime_memory_bytes=self.runtime_memory_bytes,
+            runtime_memory_swap_bytes=self.runtime_memory_swap_bytes,
         )
 
     def receipt_profile(self) -> NativeRunProfile:
@@ -112,6 +140,9 @@ class NativeOpenHandsConfig:
             native_tool_calling=self.native_tool_calling,
             base_url_mode="custom" if self.base_url else "provider-default",
             grader_server_mode=self.grader_server_mode,
+            runtime_nano_cpus=self.runtime_nano_cpus,
+            runtime_memory_bytes=self.runtime_memory_bytes,
+            runtime_memory_swap_bytes=self.runtime_memory_swap_bytes,
         )
 
 
@@ -232,10 +263,18 @@ def _controller_termination(
 class _OpenHandsSubprocessProxy:
     """Inject compatibility only into the exact pinned OpenHands child."""
 
-    def __init__(self, delegate: ModuleType, *, shim_dir: Path, reasoning_effort: str) -> None:
+    def __init__(
+        self,
+        delegate: ModuleType,
+        *,
+        shim_dir: Path,
+        reasoning_effort: str | None,
+        runtime_kwargs: dict[str, Any] | None = None,
+    ) -> None:
         self._delegate = delegate
         self._shim_dir = shim_dir
         self._reasoning_effort = reasoning_effort
+        self._runtime_kwargs = runtime_kwargs
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._delegate, name)
@@ -246,8 +285,43 @@ class _OpenHandsSubprocessProxy:
         if len(normalized) < 5 or tuple(normalized[1:5]) != marker:
             raise RuntimeError(f"refusing to inject reasoning shim into unexpected command: {normalized!r}")
         child_env = dict(kwargs.get("env") or {})
-        child_env["PYTHONPATH"] = str(self._shim_dir)
-        child_env["CYBERGYM_REASONING_EFFORT"] = self._reasoning_effort
+        if self._reasoning_effort:
+            child_env["PYTHONPATH"] = str(self._shim_dir)
+            child_env["CYBERGYM_REASONING_EFFORT"] = self._reasoning_effort
+        if self._runtime_kwargs is not None:
+            try:
+                config_index = normalized.index("--config-file") + 1
+                config_path = Path(normalized[config_index])
+                config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+                observed = config.get("sandbox", {}).get("docker_runtime_kwargs")
+                if observed != {"auto_remove": True}:
+                    raise RuntimeError(f"unexpected pinned Docker runtime defaults: {observed!r}")
+                config["sandbox"]["docker_runtime_kwargs"] = self._runtime_kwargs
+                encoded = tomli_w.dumps(config).encode()
+                temporary = config_path.with_name(f".{config_path.name}.campaign.tmp")
+                descriptor = os.open(
+                    temporary,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                    0o600,
+                )
+                try:
+                    remaining = memoryview(encoded)
+                    while remaining:
+                        written = os.write(descriptor, remaining)
+                        if written <= 0:
+                            raise OSError("short write while enforcing Docker runtime limits")
+                        remaining = remaining[written:]
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+                os.replace(temporary, config_path)
+                directory = os.open(config_path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
+            except (OSError, ValueError, tomllib.TOMLDecodeError) as exc:
+                raise RuntimeError("could not enforce paid campaign Docker runtime limits") from exc
         kwargs["env"] = child_env
         return self._delegate.run(command, *args, **kwargs)
 
@@ -274,7 +348,15 @@ def execute_upstream_openhands(
     validate_contract(root=config.repository_root)
     upstream = module or load_upstream_openhands(config.repository_root)
     original_subprocess = getattr(upstream, "subprocess", None)
-    if config.reasoning_effort:
+    runtime_kwargs = None
+    if config.runtime_nano_cpus is not None:
+        runtime_kwargs = {
+            "auto_remove": True,
+            "nano_cpus": config.runtime_nano_cpus,
+            "mem_limit": config.runtime_memory_bytes,
+            "memswap_limit": config.runtime_memory_swap_bytes,
+        }
+    if config.reasoning_effort or runtime_kwargs is not None:
         if original_subprocess is None:
             return NativeReceipt(
                 status="error",
@@ -296,6 +378,7 @@ def execute_upstream_openhands(
             original_subprocess,
             shim_dir=shim_dir,
             reasoning_effort=config.reasoning_effort,
+            runtime_kwargs=runtime_kwargs,
         )
     fresh_uuid = uuid_factory()
     agent_id = fresh_uuid.hex
@@ -349,7 +432,7 @@ def execute_upstream_openhands(
         )
     finally:
         upstream.uuid4 = original_uuid4
-        if config.reasoning_effort:
+        if config.reasoning_effort or runtime_kwargs is not None:
             upstream.subprocess = original_subprocess
 
     if returned != agent_id:
@@ -484,10 +567,12 @@ class NativeOpenHandsBatchAgent(Agent):
         *,
         executor: Callable[[NativeOpenHandsConfig, NativeTaskBinding], NativeReceipt] | None = None,
         worker_pool: Executor | None = None,
+        prelaunch_verifier: Callable[[str, str], Awaitable[None]] | None = None,
     ) -> None:
         self._configs = {task_id: config.normalized() for task_id, config in configs.items()}
         self._executor = executor or execute_upstream_openhands
         self._worker_pool = worker_pool
+        self._prelaunch_verifier = prelaunch_verifier
 
     async def __call__(self, run: Any) -> None:
         try:
@@ -513,6 +598,11 @@ class NativeOpenHandsBatchAgent(Agent):
 
             await _run_and_record(run, config, invalid_executor, self._worker_pool)
             return
+        if self._prelaunch_verifier is not None:
+            trace_id = get_current_trace_id()
+            if trace_id is None:
+                raise RuntimeError("campaign prelaunch verification has no active HUD trace ID")
+            await self._prelaunch_verifier(trace_id, binding.task_id)
         await _run_and_record(run, config, self._executor, self._worker_pool)
 
 

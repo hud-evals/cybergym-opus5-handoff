@@ -491,7 +491,13 @@ async def test_remote_hud_receipt_paginates_full_catalog(
             stop = min(start + params["limit"], len(trace_ids))
             return {
                 "items": [
-                    {"id": str(UUID(value)), "status": "completed", "reward": 0.0} for value in trace_ids[start:stop]
+                    {
+                        "id": str(UUID(value)),
+                        "status": "completed",
+                        "reward": 0.0,
+                        "evaluation_result": {"isError": False},
+                    }
+                    for value in trace_ids[start:stop]
                 ]
             }
 
@@ -503,3 +509,33 @@ async def test_remote_hud_receipt_paginates_full_catalog(
     receipt_requests = [params for path, params in requested if path.endswith("/traces")]
     assert receipt_requests == [{"limit": 1000, "offset": 0}, {"limit": 507, "offset": 1000}]
     assert len(remote) == 1507
+
+
+@pytest.mark.asyncio
+async def test_remote_hud_receipt_rejects_completed_grader_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trace_id = "a" * 32
+
+    class Client:
+        async def aget(self, path: str, *, params=None):
+            if path.endswith("/events"):
+                return {"events": [{"type": "step"}]}
+            return {
+                "items": [
+                    {
+                        "id": str(UUID(trace_id)),
+                        "status": "completed",
+                        "reward": 0.0,
+                        "metadata": {"evaluation_result": {"isError": True}},
+                    }
+                ]
+            }
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr("cybergym_hud.scheduler.PlatformClient.from_settings", lambda: Client())
+    monkeypatch.setattr("cybergym_hud.scheduler.asyncio.sleep", no_sleep)
+    with pytest.raises(RuntimeError, match="nonterminal"):
+        await require_remote_hud_receipt("job-error", (trace_id,))

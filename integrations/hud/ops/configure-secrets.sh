@@ -114,6 +114,7 @@ server = {
     "CG_RESULTS_DIR": "/srv/cybergym/results-og-fidelity",
     "CG_SERVER_MODE": "binary",
     "CG_SERVER_BINARY_DIR": "/srv/cybergym/cybergym-server-data",
+    "CG_SERVER_DEPLOYMENT_SEAL": "/etc/cybergym/server-attestation.json",
     "CG_SERVER_PORT": "8666",
     "CG_UV_BIN": uv_bin,
     "UV_CACHE_DIR": "/srv/cybergym/uv-cache",
@@ -122,13 +123,16 @@ server = {
 runner = {
     "HUD_API_KEY": hud_key,
     "OPENAI_API_KEY": openai_key,
-    "CG_DATA_DIR": "/srv/cybergym/cybergym-data/data",
+    "CG_DATA_DIR": "/srv/cybergym-runtime/task-data/cybergym-data/data",
+    "CG_DATA_PROVENANCE": "/srv/cybergym-runtime/task-data/provenance/PROVENANCE.json",
     "CG_SERVER_URL": "http://172.17.0.1:8666",
     "CG_MODEL": "gpt-5.6-sol",
     "CG_REASONING_EFFORT": "xhigh",
     "CG_JOB_NAME": "cybergym-gpt5.6-sol",
     "CG_MODEL_BASE_URL": "",
     "CG_SMOKE_TASK_ID": "arvo:10400",
+    "CG_CAMPAIGN_MAX_CONCURRENT": "4",
+    "CG_CAMPAIGN_SHARD_SIZE": "12",
 }
 
 write_atomic(Path("/etc/cybergym/server.env"), server, 0o640)

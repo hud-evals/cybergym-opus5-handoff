@@ -72,6 +72,7 @@ done
 [ "$MODEL" = gpt-5.6-sol ] || die "paid campaign requires CG_MODEL=gpt-5.6-sol"
 [ "$REASONING_EFFORT" = xhigh ] || die "paid campaign requires CG_REASONING_EFFORT=xhigh"
 [ "$JOB_NAME" = cybergym-gpt5.6-sol ] || die "paid campaign requires CG_JOB_NAME=cybergym-gpt5.6-sol"
+[ -z "${CG_MODEL_BASE_URL:-}" ] || die "paid campaign requires direct OpenAI (empty CG_MODEL_BASE_URL)"
 case "$MAX_CONCURRENT" in
     1|2|3|4|5|6) ;;
     *) die "--max-concurrent must be between 1 and 6" ;;

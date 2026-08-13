@@ -12,11 +12,13 @@ from uuid import UUID
 
 import pytest
 from hud.eval.file_tracking import FileTrackingClient
+from hud.telemetry.context import set_trace_context
 from hud.types import Trace
 
 from cybergym_hud.env import build_env
 from cybergym_hud.native import (
     NativeOpenHandsAgent,
+    NativeOpenHandsBatchAgent,
     NativeOpenHandsConfig,
     _classify_error_reasons,
     _controller_termination,
@@ -175,6 +177,28 @@ def test_gpt56_xhigh_profile_is_validated_and_receipted(config: NativeOpenHandsC
         replace(config, reasoning_effort="xhigh").normalized()
 
 
+def test_runtime_limits_are_coherent_and_receipted(config: NativeOpenHandsConfig) -> None:
+    configured = replace(
+        config,
+        runtime_nano_cpus=4_000_000_000,
+        runtime_memory_bytes=8 * 1024**3,
+        runtime_memory_swap_bytes=8 * 1024**3,
+    ).normalized()
+    profile = configured.receipt_profile()
+    assert profile.runtime_nano_cpus == 4_000_000_000
+    assert profile.runtime_memory_bytes == 8 * 1024**3
+    assert profile.runtime_memory_swap_bytes == 8 * 1024**3
+    with pytest.raises(ValueError, match="together"):
+        replace(config, runtime_nano_cpus=4_000_000_000).normalized()
+    with pytest.raises(ValueError, match="may not be lower"):
+        replace(
+            config,
+            runtime_nano_cpus=4_000_000_000,
+            runtime_memory_bytes=8 * 1024**3,
+            runtime_memory_swap_bytes=4 * 1024**3,
+        ).normalized()
+
+
 def test_openhands_subprocess_proxy_injects_only_the_exact_child(tmp_path: Path) -> None:
     calls = []
 
@@ -185,16 +209,78 @@ def test_openhands_subprocess_proxy_injects_only_the_exact_child(tmp_path: Path)
             calls.append((command, args, kwargs))
             return "done"
 
-    proxy = _OpenHandsSubprocessProxy(Delegate(), shim_dir=tmp_path / "shim", reasoning_effort="xhigh")
-    command = ["/usr/bin/poetry", "run", "python", "-m", "openhands.core.main", "--config-file", "x"]
+    runtime_kwargs = {
+        "auto_remove": True,
+        "nano_cpus": 4_000_000_000,
+        "mem_limit": 8 * 1024**3,
+        "memswap_limit": 8 * 1024**3,
+    }
+    proxy = _OpenHandsSubprocessProxy(
+        Delegate(),
+        shim_dir=tmp_path / "shim",
+        reasoning_effort="xhigh",
+        runtime_kwargs=runtime_kwargs,
+    )
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[sandbox]\ndocker_runtime_kwargs = {auto_remove = true}\n", encoding="utf-8")
+    command = [
+        "/usr/bin/poetry",
+        "run",
+        "python",
+        "-m",
+        "openhands.core.main",
+        "--config-file",
+        str(config_path),
+    ]
     assert proxy.run(command, env={"LLM_API_KEY": "secret"}) == "done"
     assert calls[0][2]["env"] == {
         "LLM_API_KEY": "secret",
         "PYTHONPATH": str(tmp_path / "shim"),
         "CYBERGYM_REASONING_EFFORT": "xhigh",
     }
+    rendered = config_path.read_text(encoding="utf-8")
+    assert "nano_cpus = 4000000000" in rendered
+    assert "mem_limit = 8589934592" in rendered
+    assert "memswap_limit = 8589934592" in rendered
+    assert config_path.stat().st_mode & 0o777 == 0o600
     with pytest.raises(RuntimeError, match="unexpected command"):
         proxy.run(["/usr/bin/poetry", "run", "python", "other.py"], env={})
+
+
+@pytest.mark.asyncio
+async def test_batch_prelaunch_verifier_runs_before_native_executor(
+    monkeypatch: pytest.MonkeyPatch,
+    config: NativeOpenHandsConfig,
+) -> None:
+    binding = NativeTaskBinding(task_id="arvo:10013", server=config.server)
+    events: list[tuple[str, str]] = []
+
+    async def verify(trace_id: str, task_id: str) -> None:
+        events.append((trace_id, task_id))
+
+    async def record(*_args, **_kwargs) -> None:
+        events.append(("record", "native"))
+
+    monkeypatch.setattr("cybergym_hud.native._run_and_record", record)
+    agent = NativeOpenHandsBatchAgent(
+        {binding.task_id: config},
+        prelaunch_verifier=verify,
+    )
+    with set_trace_context("a" * 32):
+        await agent(SimpleNamespace(prompt_text=binding.model_dump_json()))
+    assert events == [("a" * 32, binding.task_id), ("record", "native")]
+
+    async def block(_trace_id: str, _task_id: str) -> None:
+        raise RuntimeError("HUD trace missing")
+
+    events.clear()
+    blocked = NativeOpenHandsBatchAgent(
+        {binding.task_id: config},
+        prelaunch_verifier=block,
+    )
+    with set_trace_context("b" * 32), pytest.raises(RuntimeError, match="HUD trace missing"):
+        await blocked(SimpleNamespace(prompt_text=binding.model_dump_json()))
+    assert events == []
 
 
 @pytest.mark.parametrize("upstream", [FakeUpstream(fail=True), FakeUpstream(return_none=True)])

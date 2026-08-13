@@ -247,6 +247,10 @@ def test_secret_entry_and_dispatch_never_put_values_in_argv() -> None:
     assert "secrets.token_urlsafe" in configure
     assert "/etc/cybergym/server.env" in configure
     assert "/etc/cybergym/runner.env" in configure
+    assert '"CG_DATA_DIR": "/srv/cybergym-runtime/task-data/cybergym-data/data"' in configure
+    assert '"CG_DATA_PROVENANCE": "/srv/cybergym-runtime/task-data/provenance/PROVENANCE.json"' in configure
+    assert '"CG_SERVER_DEPLOYMENT_SEAL": "/etc/cybergym/server-attestation.json"' in configure
+    assert '"CG_CAMPAIGN_MAX_CONCURRENT": "4"' in configure
     assert "HUD_API_KEY=" not in configure
     assert "OPENAI_API_KEY=" not in configure
     assert "try-restart" not in configure

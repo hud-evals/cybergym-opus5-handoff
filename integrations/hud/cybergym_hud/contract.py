@@ -171,6 +171,24 @@ def validate_contract(
         "binary": "upstream_published_binary_only_server_reported_separately",
     }:
         raise ValueError("upstream grader server profiles drifted")
+    if runtime["paid_campaign"] != {
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "xhigh",
+        "max_iterations": 200,
+        "timeout_seconds": 3600,
+        "job_name": "cybergym-gpt5.6-sol",
+        "rolling_max_concurrent": 6,
+        "default_shard_size": 12,
+        "source_repository": "sunblaze-ucb/cybergym",
+        "source_revision": "bde190ded494e52bc684b66073b436c9d992c7c6",
+        "reviewed_binary_tree_sha256": "fe793d3ed06692b5566e3b1eeca91e39eabb87c5386dd7091d1c94516892b455",
+        "binary_identity_scope": "reviewed_deployment_snapshot_not_upstream_provenance",
+        "runtime_nano_cpus": 4_000_000_000,
+        "runtime_memory_bytes": 8 * 1024**3,
+        "runtime_memory_swap_bytes": 8 * 1024**3,
+        "restart_policy": "durable_launch_journal_plus_remote_hud_receipt_reconciliation",
+    }:
+        raise ValueError("paid campaign profile drifted")
     if runtime["resume"] or runtime["retries"] != 0:
         raise ValueError("resume and retry are outside this profile")
     if scoring["primary_metric"] != "paper_era_agent_wide_any_of":

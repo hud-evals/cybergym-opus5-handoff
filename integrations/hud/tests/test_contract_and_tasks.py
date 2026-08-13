@@ -47,6 +47,10 @@ def test_packaged_contract_and_checkout_are_pinned() -> None:
         "all_other_controller_errors": "non_reportable_infrastructure_error",
         "monetary_budget_configured": False,
     }
+    assert CONTRACT["runtime"]["paid_campaign"]["reviewed_binary_tree_sha256"] == (
+        "fe793d3ed06692b5566e3b1eeca91e39eabb87c5386dd7091d1c94516892b455"
+    )
+    assert CONTRACT["runtime"]["paid_campaign"]["max_iterations"] == 200
     assert CONTRACT["scoring"]["primary_metric"] == "paper_era_agent_wide_any_of"
     assert CONTRACT["scoring"]["scheduled_task_binding_enforced"] is False
     assert CONTRACT["scoring"]["current_faq_final_submission_claimed"] is False

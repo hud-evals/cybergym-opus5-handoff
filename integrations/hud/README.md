@@ -206,6 +206,22 @@ then verifies both selected binary trees and the runner image instead of
 silently accepting missing per-task images. Report image-mode and binary-mode
 scores separately.
 
+For a paid binary campaign, freeze the corpus under root ownership (without
+changing its reviewed mode bits), restart the pinned service, and capture its
+root-owned deployment seal. The later no-spend preflight binds the exact
+systemd invocation, clean checkout/helper, Python child, private listener
+socket, and binary directory to that seal:
+
+```bash
+sudo chown -hR root:root /srv/cybergym/cybergym-server-data
+sudo uv run --frozen --project integrations/hud \
+  cybergym-hud-attest-grader capture \
+  --repository-root "$PWD" \
+  --binary-dir /srv/cybergym/cybergym-server-data \
+  --server-url http://172.17.0.1:8666 \
+  --seal /etc/cybergym/server-attestation.json
+```
+
 ### Secrets and non-secret operator settings
 
 Never commit, print, paste into chat, or pass a key on a command line. On a
@@ -361,7 +377,21 @@ First validate the entire 1,507-task corpus without inference or provider
 spend. In addition to the common preflight, this reads every description and
 source tarball, verifies every selected image/binary grader artifact, records
 source/grader SHA-256 fingerprints, and checks worker capacity for the
-requested width:
+requested width. `CG_DATA_PROVENANCE` must point at the verified,
+mode-protected `PROVENANCE.json` for the pinned selective dataset revision;
+the preflight compares every Level-1 file to its selected-manifest SHA-256:
+After the staging verifier finishes, make the selected data and provenance
+root-owned but group-readable by the operator (`root:rose`, directories 0550,
+files 0440). The campaign preflight rejects a symlinked, writable, or
+non-root-owned source tree so task inputs cannot drift after the paid gate.
+Binary grading is additionally pinned to the reviewed deployment snapshot
+tree digest. That digest authenticates the bytes used for this campaign; the
+upstream binary corpus does not publish a revision manifest, so it is not
+presented as independent upstream provenance. All four binary-runner images
+are likewise checked against their reviewed linux/amd64 IDs and RepoDigests,
+including the upstream file named `latest`. The deployed grader tree must
+also be root-owned with no group/world-writable files or directories, while
+the CyberGym service continues to run unprivileged with read-only Docker binds.
 
 ```bash
 integrations/hud/ops/cybergym-ops campaign-preflight --max-concurrent 1
@@ -388,14 +418,19 @@ shard also stops later spend; inspect it and use `--continue-after-errors` only
 to skip those already-paid rows and proceed.
 
 Rolling width is configurable from 1 through 6, but the no-spend capacity gate
-requires 4 CPUs and 8 GiB per active OpenHands sandbox plus 2 GiB host reserve.
-Consequently an 8-vCPU/16-GiB worker is admitted at width 1; width 2 requires
-at least 8 CPUs and 18 GiB, and width 6 requires at least 24 CPUs and 50 GiB.
+requires 4 CPUs and 8 GiB per active OpenHands sandbox plus 6 GiB host reserve.
+The paid campaign enforces those per-sandbox Docker CPU and memory limits and
+disables swap above the same 8-GiB ceiling; this is an operator comparability
+envelope, not a paper claim. Consequently width 1 requires at least 4 CPUs and
+14 GiB, width 2 requires 8 CPUs and 22 GiB, and width 6 requires 24 CPUs and
+54 GiB. The reserve covers the host-side OpenHands controllers and grader;
+the grader containers themselves remain the unchanged upstream implementation.
 Within a shard the scheduler is rolling: completion of one full
 OpenHands/Docker lifecycle releases the next row immediately. Provider, HUD,
 and CyberGym keys remain environment-only; the operator never places them in
-argv, manifests, summaries, or its logs. `CG_MODEL_BASE_URL` is also read from
-the environment rather than passed on the command line.
+argv, manifests, summaries, or its logs. This exact paid arm requires direct
+OpenAI, so `CG_MODEL_BASE_URL` must be empty; endpoint tokens therefore cannot
+be copied into upstream `args.json`.
 
 ## Rolling batches (15 concurrent maximum)
 

@@ -14,13 +14,20 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from hud.eval import Job
 from hud.settings import settings
 from hud.utils.platform import PlatformClient
 
 from .contract import CONTRACT, validate_contract
-from .native import NativeOpenHandsConfig, execute_upstream_openhands
+from .native import (
+    CAMPAIGN_RUNTIME_MEMORY_BYTES,
+    CAMPAIGN_RUNTIME_MEMORY_SWAP_BYTES,
+    CAMPAIGN_RUNTIME_NANO_CPUS,
+    NativeOpenHandsConfig,
+    execute_upstream_openhands,
+)
 from .receipt import NativeReceipt, NativeTaskBinding
 from .scheduler import run_many, verify_and_persist_remote_receipt, write_summary
 from .taskset import make_taskset
@@ -57,6 +64,29 @@ def _endpoint_digest(value: str) -> str | None:
 
 def _task_slug(task_id: str) -> str:
     return task_id.replace(":", "-")
+
+
+def _uuid_key(value: object) -> str:
+    rendered = str(value)
+    try:
+        return UUID(rendered).hex
+    except ValueError:
+        return rendered
+
+
+def _remote_evaluation_is_error(row: dict[str, Any]) -> bool:
+    """Fail closed unless the remote grader frame explicitly reports success."""
+
+    evaluation = row.get("evaluation_result")
+    if evaluation is None:
+        metadata = row.get("metadata")
+        evaluation = metadata.get("evaluation_result") if isinstance(metadata, dict) else None
+    if not isinstance(evaluation, dict):
+        return True
+    marker = evaluation.get("isError")
+    if marker is None:
+        marker = evaluation.get("is_error")
+    return marker is not False
 
 
 def _campaign_identity(
@@ -101,6 +131,11 @@ def validate_campaign_profile(config: NativeOpenHandsConfig, *, max_concurrent: 
         "max_output_tokens": 2048,
         "seed": None,
         "native_tool_calling": None,
+        "silent": True,
+        "base_url": "",
+        "runtime_nano_cpus": CAMPAIGN_RUNTIME_NANO_CPUS,
+        "runtime_memory_bytes": CAMPAIGN_RUNTIME_MEMORY_BYTES,
+        "runtime_memory_swap_bytes": CAMPAIGN_RUNTIME_MEMORY_SWAP_BYTES,
     }
     drift = {
         name: {"expected": value, "observed": getattr(config, name)}
@@ -137,6 +172,11 @@ def load_preflight_fingerprints(
         "task_count": len(catalog),
         "grader_server_mode": config.grader_server_mode,
         "max_concurrent": max_concurrent,
+        "runtime_limits": {
+            "nano_cpus": CAMPAIGN_RUNTIME_NANO_CPUS,
+            "memory": CAMPAIGN_RUNTIME_MEMORY_BYTES,
+            "memory_swap": CAMPAIGN_RUNTIME_MEMORY_SWAP_BYTES,
+        },
     }
     drift = {
         key: {"expected": value, "observed": report.get(key)}
@@ -146,7 +186,15 @@ def load_preflight_fingerprints(
     if drift:
         raise CampaignBlocked(f"full-corpus preflight report does not match this campaign: {drift}")
     fingerprints: dict[str, str] = {}
-    for key in ("source_artifact_sha256", "grader_artifact_sha256"):
+    fingerprint_keys = [
+        "source_artifact_sha256",
+        "grader_artifact_sha256",
+        "source_provenance_sha256",
+        "source_selected_manifest_sha256",
+    ]
+    if config.grader_server_mode == "binary":
+        fingerprint_keys.append("binary_tree_sha256")
+    for key in fingerprint_keys:
         value = report.get(key)
         malformed = (
             not isinstance(value, str)
@@ -241,8 +289,7 @@ class CampaignState:
 
     def _validate_loaded(self, *, task_ids: tuple[str, ...], shard_size: int) -> None:
         expected_shards = [
-            list(task_ids[offset : offset + shard_size])
-            for offset in range(0, len(task_ids), shard_size)
+            list(task_ids[offset : offset + shard_size]) for offset in range(0, len(task_ids), shard_size)
         ]
         shards = self.payload.get("shards")
         if not isinstance(shards, list) or len(shards) != len(expected_shards):
@@ -437,6 +484,37 @@ async def fetch_job_traces(job_id: str, *, client: PlatformClient | None = None)
     raise CampaignBlocked(f"HUD trace pagination did not terminate for job {job_id}")
 
 
+async def require_remote_job_receipt(job: Job, *, client: PlatformClient | None = None) -> None:
+    """Prove HUD accepted the named Job before any provider call can start."""
+
+    client = client or PlatformClient.from_settings()
+    last_problem = "no response"
+    for attempt in range(3):
+        try:
+            remote = await client.aget(f"/jobs/{job.id}")
+        except Exception as exc:  # HUD's Job.start reporter is intentionally best-effort.
+            last_problem = f"{type(exc).__name__}: {exc}"
+        else:
+            if (
+                isinstance(remote, dict)
+                and _uuid_key(remote.get("id")) == _uuid_key(job.id)
+                and remote.get("name") == CAMPAIGN_JOB_NAME
+                and remote.get("can_edit") is True
+                and remote.get("group_size") == 1
+                and remote.get("taskset_id") is None
+            ):
+                traces = await client.aget(f"/jobs/{job.id}/traces", params={"limit": 1, "offset": 0})
+                page = traces if isinstance(traces, list) else traces.get("items", [])
+                if isinstance(page, list) and not page:
+                    return
+                last_problem = "HUD acknowledged the Job with unexpected pre-existing traces"
+                continue
+            last_problem = "HUD returned a mismatched or non-editable Job receipt"
+        if attempt < 2:
+            await asyncio.sleep(1.0)
+    raise CampaignBlocked(f"HUD did not acknowledge named Job {job.id} before the paid boundary: {last_problem}")
+
+
 async def require_remote_trace_events(
     trace_ids: Iterable[str],
     *,
@@ -460,6 +538,33 @@ async def require_remote_trace_events(
             missing.append(trace_id)
     if missing:
         raise CampaignBlocked("HUD terminal receipts lack remotely readable telemetry events: " + ", ".join(missing))
+
+
+async def require_remote_trace_enter(
+    job_id: str,
+    trace_id: str,
+    task_id: str,
+    *,
+    client: PlatformClient | None = None,
+) -> None:
+    """Prove the asynchronous HUD trace-enter row before crossing spend."""
+
+    client = client or PlatformClient.from_settings()
+    expected_trace = _uuid_key(trace_id)
+    expected_slug = _task_slug(task_id)
+    last_problem = "trace row was absent"
+    for attempt in range(5):
+        rows = await fetch_job_traces(job_id, client=client)
+        matches = [row for row in rows if _uuid_key(row.get("id")) == expected_trace]
+        if len(matches) == 1 and matches[0].get("task_slug") == expected_slug:
+            return
+        if matches:
+            last_problem = "trace row had a mismatched task slug"
+        if attempt < 4:
+            await asyncio.sleep(1.0)
+    raise CampaignBlocked(
+        f"HUD did not acknowledge trace {trace_id} as {expected_slug} before the paid boundary: {last_problem}"
+    )
 
 
 async def reconcile_running_attempt(
@@ -494,7 +599,7 @@ async def reconcile_running_attempt(
     launched = set(attempt.get("launched_task_ids", []))
     for task_id in attempt["task_ids"]:
         task_rows = by_task.get(task_id, [])
-        if task_rows:
+        if task_rows and task_id in launched:
             row = task_rows[0]
             if row.get("status") in TERMINAL_STATUSES and row.get("reward") is not None:
                 terminal.append(task_id)
@@ -538,7 +643,9 @@ async def reconcile_running_attempt(
         f"shard-{shard_index + 1:04d}-attempt-{attempt['number']:02d}-{attempt['job_id']}-recovered.json"
     )
     write_summary(summary_path, recovered)
-    has_errors = any(row.get("status") in {"error", "cancelled"} for row in terminal_rows)
+    has_errors = any(
+        row.get("status") in {"error", "cancelled"} or _remote_evaluation_is_error(row) for row in terminal_rows
+    )
     state.complete_attempt(
         shard_index,
         attempt["number"],
@@ -605,6 +712,7 @@ async def run_campaign(
     continue_after_errors: bool = False,
     client: PlatformClient | None = None,
     job_factory: Callable[..., Any] = Job.start,
+    job_receipt_verifier: Callable[..., Any] = require_remote_job_receipt,
     batch_runner: Callable[..., Any] = run_many,
     receipt_verifier: Callable[..., Any] = verify_and_persist_remote_receipt,
     native_executor: Callable[[NativeOpenHandsConfig, NativeTaskBinding], NativeReceipt] = execute_upstream_openhands,
@@ -647,9 +755,8 @@ async def run_campaign(
         job = await job_factory(CAMPAIGN_JOB_NAME, taskset_id=taskset.api_id)
         if job.name != CAMPAIGN_JOB_NAME:
             raise CampaignBlocked("HUD Job factory changed the required campaign job name")
-        attempt_number = state.start_attempt(
-            shard["index"], job=job, task_ids=pending, max_concurrent=max_concurrent
-        )
+        await job_receipt_verifier(job, client=client)
+        attempt_number = state.start_attempt(shard["index"], job=job, task_ids=pending, max_concurrent=max_concurrent)
         shard_index = shard["index"]
         current_attempt = attempt_number
 
@@ -665,6 +772,14 @@ async def run_campaign(
             state.mark_native_returned(_shard_index, _attempt, binding.task_id)
             return receipt
 
+        async def prelaunch_verifier(
+            trace_id: str,
+            task_id: str,
+            *,
+            _job_id: str = str(job.id),
+        ) -> None:
+            await require_remote_trace_enter(_job_id, trace_id, task_id, client=client)
+
         result = await batch_runner(
             pending,
             config,
@@ -672,6 +787,7 @@ async def run_campaign(
             executor=journaled_executor,
             job_name=CAMPAIGN_JOB_NAME,
             job=job,
+            prelaunch_verifier=prelaunch_verifier,
         )
         validate_attempt_result(result, expected_task_ids=pending, config=config, job=job)
         verified = await receipt_verifier(result, results_dir=config.log_dir.parent)
@@ -741,7 +857,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-concurrent", type=int, default=1)
     parser.add_argument("--shard-size", type=int, default=DEFAULT_SHARD_SIZE)
     parser.add_argument("--keep-tmp", action="store_true")
-    parser.add_argument("--silent", action="store_true")
     return parser
 
 
@@ -766,8 +881,13 @@ def main() -> None:
         timeout=CAMPAIGN_TIMEOUT_SECONDS,
         base_url=os.environ.get("CG_MODEL_BASE_URL", ""),
         grader_server_mode=args.grader_server_mode,
-        silent=args.silent,
+        # A multi-day service must not copy model/tool output into the system
+        # journal. The private per-rollout OpenHands logs remain available.
+        silent=True,
         remove_tmp=not args.keep_tmp,
+        runtime_nano_cpus=CAMPAIGN_RUNTIME_NANO_CPUS,
+        runtime_memory_bytes=CAMPAIGN_RUNTIME_MEMORY_BYTES,
+        runtime_memory_swap_bytes=CAMPAIGN_RUNTIME_MEMORY_SWAP_BYTES,
     )
     config.log_dir.mkdir(parents=True, exist_ok=True)
     config.tmp_dir.mkdir(parents=True, exist_ok=True)
