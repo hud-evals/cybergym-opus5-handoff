@@ -199,7 +199,10 @@ def test_zero_exit_openhands_controller_error_becomes_infra_receipt(config: Nati
             log_dir = receipt_dir / "logs"
             log_dir.mkdir(parents=True)
             (log_dir / "openhands_test.log").write_text(
-                "AgentStateChangedObservation(content='', agent_state='error', reason='private provider diagnostic')\n",
+                "12:34:56 - openhands:INFO: agent_controller.py:428 - "
+                "[Agent Controller 12345678-1234-5678-1234-567812345678] "
+                "AgentStateChangedObservation(content='', agent_state='error', "
+                "reason='private provider diagnostic')\n",
                 encoding="utf-8",
             )
             return agent_id
@@ -281,7 +284,7 @@ def test_mismatched_or_mixed_controller_errors_remain_infra(
     assert "error state" in receipt.error
 
 
-def test_structured_max_iteration_cannot_mask_later_logged_provider_error(tmp_path: Path) -> None:
+def test_structured_state_store_is_authoritative_over_untrusted_raw_log(tmp_path: Path) -> None:
     receipt_dir = tmp_path / "run"
     events_dir = receipt_dir / "file" / "sessions" / "session" / "events"
     events_dir.mkdir(parents=True)
@@ -304,11 +307,69 @@ def test_structured_max_iteration_cannot_mask_later_logged_provider_error(tmp_pa
     logs_dir = receipt_dir / "logs"
     logs_dir.mkdir()
     (logs_dir / "openhands_test.log").write_text(
-        "AgentStateChangedObservation(content='', agent_state='error', reason='private provider diagnostic')\n",
+        "12:34:56 - openhands:INFO: agent_controller.py:428 - "
+        "[Agent Controller 12345678-1234-5678-1234-567812345678] "
+        "AgentStateChangedObservation(content='', agent_state='error', "
+        "reason='private provider diagnostic')\n",
         encoding="utf-8",
     )
 
-    assert _controller_termination(receipt_dir, max_iter=17) == "error"
+    assert _controller_termination(receipt_dir, max_iter=17) == "max_iterations"
+
+
+def test_agent_controlled_state_like_log_text_is_not_a_controller_error(tmp_path: Path) -> None:
+    receipt_dir = tmp_path / "run"
+    logs_dir = receipt_dir / "logs"
+    logs_dir.mkdir(parents=True)
+    (logs_dir / "openhands_test.log").write_text(
+        "12:34:56 - openhands:INFO: agent_controller.py:428 - "
+        "[Agent Controller 12345678-1234-5678-1234-567812345678] "
+        "CmdOutputObservation(content=\"AgentStateChangedObservation(content='', "
+        "agent_state='error', reason='private provider diagnostic')\")\n",
+        encoding="utf-8",
+    )
+
+    assert _controller_termination(receipt_dir, max_iter=17) == "none"
+
+
+def test_canonical_non_error_state_ignores_state_like_command_output(tmp_path: Path) -> None:
+    receipt_dir = tmp_path / "run"
+    events_dir = receipt_dir / "file" / "sessions" / "session" / "events"
+    events_dir.mkdir(parents=True)
+    (events_dir / "0000.json").write_text(
+        json.dumps(
+            {
+                "source": "environment",
+                "observation": "agent_state_changed",
+                "extras": {"agent_state": "finished", "reason": None},
+            }
+        ),
+        encoding="utf-8",
+    )
+    logs_dir = receipt_dir / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "openhands_test.log").write_text(
+        "CmdOutputObservation(content=\"AgentStateChangedObservation(content='', "
+        "agent_state='error', reason='private provider diagnostic')\")\n",
+        encoding="utf-8",
+    )
+
+    assert _controller_termination(receipt_dir, max_iter=17) == "none"
+
+
+def test_anchored_log_fallback_accepts_exact_max_iteration(tmp_path: Path) -> None:
+    receipt_dir = tmp_path / "run"
+    logs_dir = receipt_dir / "logs"
+    logs_dir.mkdir(parents=True)
+    reason = "RuntimeError: Agent reached maximum iteration in headless mode. Current iteration: 17, max iteration: 17"
+    (logs_dir / "openhands_test.log").write_text(
+        "12:34:56 - openhands:DEBUG: agent_controller.py:428 - "
+        "[Agent Controller 12345678-1234-5678-1234-567812345678] "
+        f"AgentStateChangedObservation(content='', agent_state='error', reason={reason!r})\n",
+        encoding="utf-8",
+    )
+
+    assert _controller_termination(receipt_dir, max_iter=17) == "max_iterations"
 
 
 @pytest.mark.parametrize(

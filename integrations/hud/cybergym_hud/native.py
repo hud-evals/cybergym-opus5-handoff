@@ -26,6 +26,11 @@ _MAX_ITERATION_REASON = re.compile(
     r"^RuntimeError: Agent reached maximum iteration in headless mode\. "
     r"Current iteration: (?P<current>[0-9]+), max iteration: (?P<maximum>[0-9]+)$"
 )
+_OUTER_CONTROLLER_ERROR_LOG = re.compile(
+    r"^[0-9]{2}:[0-9]{2}:[0-9]{2} - openhands:(?:DEBUG|INFO): "
+    r"agent_controller\.py:428 - \[Agent Controller [0-9a-f-]+\] "
+    r"AgentStateChangedObservation\(content='', agent_state='error', reason="
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,7 +170,7 @@ def _log_controller_termination(
                 return "error"
             with log_path.open(encoding="utf-8", errors="replace") as handle:
                 for line in handle:
-                    if "AgentStateChangedObservation(" in line and "agent_state='error'" in line:
+                    if _OUTER_CONTROLLER_ERROR_LOG.match(line):
                         error_lines.append(f"reason={expected_reason!r}" in line)
     except OSError:
         return "error"
@@ -193,7 +198,6 @@ def _controller_termination(
         event_paths = sorted(events_root.glob("*/events/*.json")) if events_root.is_dir() else []
     except OSError:
         return "error"
-    event_termination: Literal["none", "max_iterations", "error"] = "none"
     if event_paths:
         reasons: list[str] = []
         try:
@@ -219,19 +223,17 @@ def _controller_termination(
                 reasons.append(reason)
         except (OSError, ValueError, TypeError):
             return "error"
-        event_termination = _classify_error_reasons(reasons, max_iter=max_iter)
-        if event_termination == "error":
-            return "error"
+        # The append-only OpenHands event store is authoritative once it
+        # exists. Raw logs also contain agent-controlled command output, so
+        # cross-checking them could let output that merely resembles a state
+        # observation turn an otherwise valid rollout into infrastructure
+        # failure.
+        return _classify_error_reasons(reasons, max_iter=max_iter)
 
     # Early controller failures may not persist the canonical event store.
-    # Cross-check it even when canonical events exist so a partial event store
-    # cannot hide a later error that OpenHands logged.
-    log_termination = _log_controller_termination(receipt_log_dir / "logs", max_iter=max_iter)
-    if log_termination == "error":
-        return "error"
-    if event_termination == "max_iterations" or log_termination == "max_iterations":
-        return "max_iterations"
-    return "none"
+    # The fallback accepts only the pinned formatter's outer controller record;
+    # unanchored state-like text inside CmdOutputObservation is untrusted.
+    return _log_controller_termination(receipt_log_dir / "logs", max_iter=max_iter)
 
 
 class _OpenHandsSubprocessProxy:
