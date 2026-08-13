@@ -157,8 +157,14 @@ async def test_run_one_flushes_final_workspace_before_applying_cleanup_policy(
     emitted: list[tuple[str, dict[str, object]]] = []
 
     class WorkspaceWritingAgent:
-        def __init__(self, rollout_config: NativeOpenHandsConfig) -> None:
+        def __init__(
+            self,
+            rollout_config: NativeOpenHandsConfig,
+            *,
+            worker_pool=None,
+        ) -> None:
             self.config = rollout_config
+            assert worker_pool is not None
 
         async def __call__(self, run) -> None:
             assert self.config.tmp_dir == observed_root

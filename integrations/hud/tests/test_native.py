@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -180,6 +181,52 @@ async def test_hud_agent_writes_typed_receipt_to_trace(config: NativeOpenHandsCo
     assert trace.extra["native_openhands_receipt"]["agent_id"] == "1" * 32
     assert trace.extra["native_openhands_receipt"]["run_profile"]["budget_profile"] == "custom"
     assert trace.steps[-1].source == "agent"
+
+
+@pytest.mark.asyncio
+async def test_hud_cancellation_waits_for_the_native_worker_lifecycle(
+    config: NativeOpenHandsConfig,
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def executor(_config, binding):
+        started.set()
+        assert release.wait(timeout=5)
+        finished.set()
+        return NativeReceipt(
+            status="completed",
+            task_id=binding.task_id,
+            server=binding.server,
+            run_profile=config.receipt_profile(),
+            agent_id="2" * 32,
+            upstream_returned_agent_id="2" * 32,
+            log_dir="/logs/run",
+        )
+
+    trace = Trace()
+    run = SimpleNamespace(
+        prompt_text=NativeTaskBinding(task_id="arvo:10013", server=config.server).model_dump_json(),
+        trace=trace,
+        record=trace.record,
+    )
+    worker_pool = ThreadPoolExecutor(max_workers=1)
+    task = asyncio.create_task(NativeOpenHandsAgent(config, executor=executor, worker_pool=worker_pool)(run))
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        task.cancel()
+        await asyncio.sleep(0.05)
+        assert not task.done()
+        assert not finished.is_set()
+
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert finished.is_set()
+    finally:
+        release.set()
+        worker_pool.shutdown(wait=True, cancel_futures=True)
 
 
 @pytest.mark.asyncio

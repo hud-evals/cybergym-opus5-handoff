@@ -7,6 +7,7 @@ import asyncio
 import json
 import shutil
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -84,13 +85,14 @@ async def run_one(task_id: str, config: NativeOpenHandsConfig) -> dict[str, Any]
     config = config.normalized()
     validate_contract(root=config.repository_root)
     rollout_config, cleanup_after_rollout = prepare_tracked_rollout(config)
+    worker_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cybergym-native")
     try:
         taskset = make_taskset(
             server=rollout_config.server,
             selected=[task_id],
             root=rollout_config.repository_root,
         )
-        agent = NativeOpenHandsAgent(rollout_config)
+        agent = NativeOpenHandsAgent(rollout_config, worker_pool=worker_pool)
         job = await taskset.run(
             agent,
             runtime=LocalRuntime(
@@ -103,6 +105,9 @@ async def run_one(task_id: str, config: NativeOpenHandsConfig) -> dict[str, Any]
         )
         return summarize_job(job)
     finally:
+        # Never return (including on cancellation) while the native worker can
+        # still own an OpenHands process or Docker sandbox.
+        worker_pool.shutdown(wait=True, cancel_futures=True)
         # The HUD observer flushes before taskset.run returns. Cleanup here
         # cannot erase the model's final workspace before telemetry captures it.
         if cleanup_after_rollout:
@@ -133,6 +138,10 @@ async def run_many(
 
     rollout_configs: dict[str, NativeOpenHandsConfig] = {}
     cleanup_roots: dict[str, bool] = {}
+    worker_pool = ThreadPoolExecutor(
+        max_workers=max_concurrent,
+        thread_name_prefix="cybergym-native",
+    )
     try:
         for task_id in selected:
             rollout_config, cleanup_after_rollout = prepare_tracked_rollout(
@@ -153,7 +162,11 @@ async def run_many(
             )
 
         job = await taskset.run(
-            NativeOpenHandsBatchAgent(rollout_configs, executor=executor),
+            NativeOpenHandsBatchAgent(
+                rollout_configs,
+                executor=executor,
+                worker_pool=worker_pool,
+            ),
             runtime=LocalRuntime(environment_for),
             # This is the only concurrency controller: HUD releases the next
             # waiting rollout as soon as any active slot completes.
@@ -161,6 +174,10 @@ async def run_many(
         )
         return summarize_batch_job(job)
     finally:
+        # The dedicated pool both makes width 15 independent of asyncio's
+        # host-sized default executor and keeps cancellation from orphaning a
+        # native lifecycle after its HUD slot appears free.
+        worker_pool.shutdown(wait=True, cancel_futures=True)
         # Normal cleanup happens in each LocalRuntime shutdown, after that
         # rollout's file-tracking observer flush. This is only a failure or
         # cancellation fallback for roots whose runtime never shut down.

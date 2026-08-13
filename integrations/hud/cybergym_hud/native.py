@@ -6,6 +6,7 @@ import asyncio
 import importlib.util
 import json
 from collections.abc import Callable, Mapping
+from concurrent.futures import Executor
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -205,6 +206,7 @@ async def _run_and_record(
     run: Any,
     config: NativeOpenHandsConfig,
     executor: Callable[[NativeOpenHandsConfig, NativeTaskBinding], NativeReceipt],
+    worker_pool: Executor | None = None,
 ) -> None:
     """Execute one bound native rollout and attach its typed HUD receipt."""
 
@@ -212,7 +214,24 @@ async def _run_and_record(
         binding = NativeTaskBinding.model_validate_json(run.prompt_text)
         if binding.server != config.server:
             raise ValueError("HUD task server does not match native runner configuration")
-        receipt = await asyncio.to_thread(executor, config, binding)
+        loop = asyncio.get_running_loop()
+        worker = loop.run_in_executor(worker_pool, executor, config, binding)
+        try:
+            # Shield the native call so cancelling the HUD coroutine cannot
+            # release its rollout slot while OpenHands/Docker is still alive.
+            receipt = await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            # Python cannot stop a running worker thread. Keep this rollout
+            # alive until the upstream timeout/cleanup path has really ended;
+            # only then may Taskset release the semaphore and its runtime.
+            while not worker.done():
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    continue
+                except BaseException:
+                    break
+            raise
     except Exception as exc:
         task_id = "arvo:invalid"
         server = config.server
@@ -259,12 +278,14 @@ class NativeOpenHandsAgent(Agent):
         config: NativeOpenHandsConfig,
         *,
         executor: Callable[[NativeOpenHandsConfig, NativeTaskBinding], NativeReceipt] | None = None,
+        worker_pool: Executor | None = None,
     ) -> None:
         self.config = config.normalized()
         self._executor = executor or execute_upstream_openhands
+        self._worker_pool = worker_pool
 
     async def __call__(self, run: Any) -> None:
-        await _run_and_record(run, self.config, self._executor)
+        await _run_and_record(run, self.config, self._executor, self._worker_pool)
 
 
 class NativeOpenHandsBatchAgent(Agent):
@@ -275,9 +296,11 @@ class NativeOpenHandsBatchAgent(Agent):
         configs: Mapping[str, NativeOpenHandsConfig],
         *,
         executor: Callable[[NativeOpenHandsConfig, NativeTaskBinding], NativeReceipt] | None = None,
+        worker_pool: Executor | None = None,
     ) -> None:
         self._configs = {task_id: config.normalized() for task_id, config in configs.items()}
         self._executor = executor or execute_upstream_openhands
+        self._worker_pool = worker_pool
 
     async def __call__(self, run: Any) -> None:
         try:
@@ -301,9 +324,9 @@ class NativeOpenHandsBatchAgent(Agent):
                     error=f"native scheduler has no rollout config: {detail}",
                 )
 
-            await _run_and_record(run, config, invalid_executor)
+            await _run_and_record(run, config, invalid_executor, self._worker_pool)
             return
-        await _run_and_record(run, config, self._executor)
+        await _run_and_record(run, config, self._executor, self._worker_pool)
 
 
 __all__ = [

@@ -130,8 +130,12 @@ uv run --project integrations/hud cybergym-hud-run-native \
 This is a rolling HUD `Taskset.run` semaphore, not a sequence of 15-task
 waves. At most 15 native OpenHands/Docker rollouts are active; as soon as one
 rollout finishes, flushes its HUD file diff, and releases its isolated runtime,
-the next waiting task starts. Each row has a distinct native config, upstream
-temporary directory, agent UUID, and file-tracking root. Normal runs delete
+the next waiting task starts. A dedicated 15-thread native pool makes this
+width independent of Python's host-sized default executor. Cancellation waits
+for each running native worker's upstream timeout/cleanup path before its HUD
+slot is released, so the cap covers the complete OpenHands/Docker lifecycle,
+not only the visible agent coroutine. Each row has a distinct native config,
+upstream temporary directory, agent UUID, and file-tracking root. Normal runs delete
 each temporary root immediately after that row's observer flush. `--keep-tmp`
 retains every root and therefore requires correspondingly more disk.
 
