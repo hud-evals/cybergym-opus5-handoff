@@ -22,6 +22,13 @@ def test_packaged_contract_and_checkout_are_pinned() -> None:
         "shell_capability_published": False,
         "cleanup": "deferred_until_after_hud_observer_flush_then_original_keep_tmp_policy",
     }
+    assert CONTRACT["runtime"]["batch_scheduling"] == {
+        "engine": "hud_taskset_run",
+        "rolling": True,
+        "default_max_concurrent": 15,
+        "hard_max_concurrent": 15,
+        "isolated_upstream_module_per_rollout": True,
+    }
     assert CONTRACT["scoring"]["primary_metric"] == "paper_era_agent_wide_any_of"
     assert CONTRACT["scoring"]["scheduled_task_binding_enforced"] is False
     assert CONTRACT["scoring"]["current_faq_final_submission_claimed"] is False

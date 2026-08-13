@@ -8,9 +8,11 @@ agent loop, prompt, CodeAct tools, workspace construction, or Docker runtime.
 The source boundary is CyberGym commit
 `7656b71d07da6694e262f9c34ea994cd4849c0eb` and the `examples/agents`
 gitlink `b5cbe061b25e5719d296711706710438f6693079`. The scheduler calls that
-checkout's `openhands/run.py:run_with_configs` directly. A real fresh UUID is
-injected into its existing `uuid4()` point so the receipt retains the agent
-ID even when upstream trajectory validation fails.
+checkout's `openhands/run.py:run_with_configs` directly. Every rollout loads
+an independent copy of that pinned runner module. A real fresh UUID is
+injected into that private module's existing `uuid4()` point so the receipt
+retains the agent ID even when upstream trajectory validation fails, without
+serializing concurrent OpenHands runs around shared Python state.
 
 ## Exact profile—and its limits
 
@@ -100,10 +102,61 @@ The command prints a JSON HUD receipt. Exit status `2` means runner or grader
 infrastructure failed; reward `0` with a non-error receipt is a valid benchmark
 failure.
 
+## Rolling batches (15 concurrent by default)
+
+The same command accepts multiple task IDs or a deterministic catalog prefix:
+
+```bash
+uv run --project integrations/hud cybergym-hud-run-native \
+  arvo:10013 arvo:10016 oss-fuzz:42535201 \
+  --repository-root "$PWD" \
+  --data-dir /path/to/cybergym_data/data \
+  --server http://127.0.0.1:8666 \
+  --model claude-sonnet-4-5 \
+  --log-dir /path/to/results/logs \
+  --tmp-dir /path/to/results/tmp
+
+uv run --project integrations/hud cybergym-hud-run-native \
+  --first-n 100 \
+  --repository-root "$PWD" \
+  --data-dir /path/to/cybergym_data/data \
+  --server http://127.0.0.1:8666 \
+  --model claude-sonnet-4-5 \
+  --log-dir /path/to/results/logs \
+  --tmp-dir /path/to/results/tmp \
+  --max-concurrent 15
+```
+
+This is a rolling HUD `Taskset.run` semaphore, not a sequence of 15-task
+waves. At most 15 native OpenHands/Docker rollouts are active; as soon as one
+rollout finishes, flushes its HUD file diff, and releases its isolated runtime,
+the next waiting task starts. Each row has a distinct native config, upstream
+temporary directory, agent UUID, and file-tracking root. Normal runs delete
+each temporary root immediately after that row's observer flush. `--keep-tmp`
+retains every root and therefore requires correspondingly more disk.
+
+Running the full paid catalog requires an explicit acknowledgement:
+
+```bash
+uv run --project integrations/hud cybergym-hud-run-native \
+  --all --confirm-paid-all \
+  --repository-root "$PWD" \
+  --data-dir /path/to/cybergym_data/data \
+  --server http://127.0.0.1:8666 \
+  --model claude-sonnet-4-5 \
+  --log-dir /path/to/results/logs \
+  --tmp-dir /path/to/results/tmp
+```
+
+The same guard applies if `--first-n` or an explicit ID list covers all 1,507
+tasks. Batch output is one JSON object containing the HUD job ID, aggregate
+counts, and the ordered per-task receipts. A one-ID invocation retains the
+original one-shot JSON shape.
+
 `cybergym_hud.taskset.make_taskset(...)` exposes all 1,507 pinned catalog rows
 (1,368 ARVO and 139 OSS-Fuzz) for programmatic scheduling. Native runs are
-resource-heavy; callers should keep concurrency at one unless they deliberately
-provision independent Docker capacity.
+resource-heavy; lower `--max-concurrent` when the native Docker host cannot
+sustain 15 independent containers.
 
 ## Exact upstream passthroughs
 

@@ -5,8 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
-import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -19,8 +18,6 @@ from hud.types import Step
 from .contract import repository_root, validate_contract
 from .receipt import NativeReceipt, NativeRunProfile, NativeTaskBinding, normalize_server
 from .upstream import require_upstream_agent_checkout
-
-_UUID_INJECTION_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,9 +92,11 @@ class NativeOpenHandsConfig:
 
 
 def load_upstream_openhands(root: Path) -> ModuleType:
+    """Load one private copy of the pinned upstream runner for one rollout."""
+
     agents = require_upstream_agent_checkout(root)
     script = agents / "openhands/run.py"
-    name = f"_cybergym_upstream_openhands_{abs(hash(script))}"
+    name = f"_cybergym_upstream_openhands_{uuid4().hex}"
     spec = importlib.util.spec_from_file_location(name, script)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"could not load pinned upstream OpenHands runner at {script}")
@@ -160,25 +159,25 @@ def execute_upstream_openhands(
     )
 
     # run_with_configs owns UUID creation but returns None when trajectory
-    # validation fails. Inject one real freshly generated UUID so the HUD
-    # receipt always knows which upstream records belong to this attempt.
-    with _UUID_INJECTION_LOCK:
-        original_uuid4 = upstream.uuid4
-        upstream.uuid4 = lambda: fresh_uuid
-        try:
-            returned = upstream.run_with_configs(openhands_args, task_args)
-        except Exception as exc:
-            return NativeReceipt(
-                status="error",
-                task_id=binding.task_id,
-                server=binding.server,
-                run_profile=run_profile,
-                agent_id=agent_id,
-                log_dir=str(receipt_log_dir),
-                error=f"upstream run_with_configs failed: {type(exc).__name__}: {exc}",
-            )
-        finally:
-            upstream.uuid4 = original_uuid4
+    # validation fails. Production calls load a private module per rollout, so
+    # this injection never mutates state shared with another rollout and does
+    # not serialize the expensive native OpenHands executions.
+    original_uuid4 = upstream.uuid4
+    upstream.uuid4 = lambda: fresh_uuid
+    try:
+        returned = upstream.run_with_configs(openhands_args, task_args)
+    except Exception as exc:
+        return NativeReceipt(
+            status="error",
+            task_id=binding.task_id,
+            server=binding.server,
+            run_profile=run_profile,
+            agent_id=agent_id,
+            log_dir=str(receipt_log_dir),
+            error=f"upstream run_with_configs failed: {type(exc).__name__}: {exc}",
+        )
+    finally:
+        upstream.uuid4 = original_uuid4
 
     if returned != agent_id:
         return NativeReceipt(
@@ -202,6 +201,56 @@ def execute_upstream_openhands(
     )
 
 
+async def _run_and_record(
+    run: Any,
+    config: NativeOpenHandsConfig,
+    executor: Callable[[NativeOpenHandsConfig, NativeTaskBinding], NativeReceipt],
+) -> None:
+    """Execute one bound native rollout and attach its typed HUD receipt."""
+
+    try:
+        binding = NativeTaskBinding.model_validate_json(run.prompt_text)
+        if binding.server != config.server:
+            raise ValueError("HUD task server does not match native runner configuration")
+        receipt = await asyncio.to_thread(executor, config, binding)
+    except Exception as exc:
+        task_id = "arvo:invalid"
+        server = config.server
+        try:
+            raw = json.loads(run.prompt_text)
+            if isinstance(raw, dict):
+                task_id = str(raw.get("task_id", task_id))
+                server = str(raw.get("server", server))
+            receipt = NativeReceipt(
+                status="error",
+                task_id=task_id,
+                server=server,
+                run_profile=config.receipt_profile(),
+                error=f"native scheduler failed: {type(exc).__name__}: {exc}",
+            )
+        except Exception:
+            receipt = NativeReceipt(
+                status="error",
+                task_id="arvo:invalid",
+                server=config.server,
+                run_profile=config.receipt_profile(),
+                error=f"native scheduler failed: {type(exc).__name__}: {exc}",
+            )
+
+    payload = receipt.model_dump(mode="json")
+    run.trace.content = receipt.model_dump_json()
+    run.trace.extra.update(
+        {
+            "runner": receipt.runner,
+            "native_openhands_receipt": payload,
+        }
+    )
+    run.record(Step(source="agent", extra={"native_openhands_receipt": payload}))
+    run.trace.stop_reason = "done"
+    if receipt.status == "error":
+        run.trace.status = "error"
+
+
 class NativeOpenHandsAgent(Agent):
     """HUD agent whose only action is one exact upstream native run."""
 
@@ -215,51 +264,51 @@ class NativeOpenHandsAgent(Agent):
         self._executor = executor or execute_upstream_openhands
 
     async def __call__(self, run: Any) -> None:
+        await _run_and_record(run, self.config, self._executor)
+
+
+class NativeOpenHandsBatchAgent(Agent):
+    """Route each shared-Taskset call to its trace-private native config."""
+
+    def __init__(
+        self,
+        configs: Mapping[str, NativeOpenHandsConfig],
+        *,
+        executor: Callable[[NativeOpenHandsConfig, NativeTaskBinding], NativeReceipt] | None = None,
+    ) -> None:
+        self._configs = {task_id: config.normalized() for task_id, config in configs.items()}
+        self._executor = executor or execute_upstream_openhands
+
+    async def __call__(self, run: Any) -> None:
         try:
             binding = NativeTaskBinding.model_validate_json(run.prompt_text)
-            if binding.server != self.config.server:
-                raise ValueError("HUD task server does not match native runner configuration")
-            receipt = await asyncio.to_thread(self._executor, self.config, binding)
+            config = self._configs[binding.task_id]
         except Exception as exc:
-            task_id = "arvo:invalid"
-            server = self.config.server
-            try:
-                raw = json.loads(run.prompt_text)
-                if isinstance(raw, dict):
-                    task_id = str(raw.get("task_id", task_id))
-                    server = str(raw.get("server", server))
-                receipt = NativeReceipt(
+            # Use any profile only to encode a typed infrastructure error. The
+            # taskset factory prevents this path for valid scheduled rows.
+            config = next(iter(self._configs.values()))
+            detail = f"{type(exc).__name__}: {exc}"
+
+            def invalid_executor(
+                _config: NativeOpenHandsConfig,
+                invalid_binding: NativeTaskBinding,
+            ) -> NativeReceipt:
+                return NativeReceipt(
                     status="error",
-                    task_id=task_id,
-                    server=server,
-                    run_profile=self.config.receipt_profile(),
-                    error=f"native scheduler failed: {type(exc).__name__}: {exc}",
-                )
-            except Exception:
-                receipt = NativeReceipt(
-                    status="error",
-                    task_id="arvo:invalid",
-                    server=self.config.server,
-                    run_profile=self.config.receipt_profile(),
-                    error=f"native scheduler failed: {type(exc).__name__}: {exc}",
+                    task_id=invalid_binding.task_id,
+                    server=invalid_binding.server,
+                    run_profile=config.receipt_profile(),
+                    error=f"native scheduler has no rollout config: {detail}",
                 )
 
-        payload = receipt.model_dump(mode="json")
-        run.trace.content = receipt.model_dump_json()
-        run.trace.extra.update(
-            {
-                "runner": receipt.runner,
-                "native_openhands_receipt": payload,
-            }
-        )
-        run.record(Step(source="agent", extra={"native_openhands_receipt": payload}))
-        run.trace.stop_reason = "done"
-        if receipt.status == "error":
-            run.trace.status = "error"
+            await _run_and_record(run, config, invalid_executor)
+            return
+        await _run_and_record(run, config, self._executor)
 
 
 __all__ = [
     "NativeOpenHandsAgent",
+    "NativeOpenHandsBatchAgent",
     "NativeOpenHandsConfig",
     "execute_upstream_openhands",
     "load_upstream_openhands",

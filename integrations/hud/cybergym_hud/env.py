@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from hud.environment import Answer, Environment, Workspace
@@ -12,7 +13,11 @@ from .receipt import NativeReceipt, NativeTaskBinding
 ENV_NAME = "cybergym-og-native-receipt"
 
 
-def build_env(*, file_tracking_root: str | Path | None = None) -> Environment:
+def build_env(
+    *,
+    file_tracking_root: str | Path | None = None,
+    cleanup_file_tracking_root: bool = False,
+) -> Environment:
     """Build a fresh receipt environment for one HUD runtime acquisition.
 
     ``file_tracking_root`` is the upstream OpenHands ``tmp_dir``. The actual
@@ -35,6 +40,12 @@ def build_env(*, file_tracking_root: str | Path | None = None) -> Environment:
         @receipt_env.shutdown
         async def _stop_file_tracking() -> None:
             await observed_workspace.stop()
+            # HUD's rollout observer flushes before LocalRuntime shuts down the
+            # environment. This restores upstream's ordinary remove_tmp policy
+            # per completed slot instead of retaining all roots until the batch
+            # finishes.
+            if cleanup_file_tracking_root:
+                shutil.rmtree(file_tracking_root, ignore_errors=True)
 
     @receipt_env.template(id="run_upstream_openhands", returns=NativeReceipt)
     async def run_upstream_openhands(task_id: str, server: str):

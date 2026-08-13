@@ -111,6 +111,14 @@ def validate_contract(
         "cleanup": "deferred_until_after_hud_observer_flush_then_original_keep_tmp_policy",
     }:
         raise ValueError("HUD file tracking must remain observation-only over the upstream workspace root")
+    if runtime["batch_scheduling"] != {
+        "engine": "hud_taskset_run",
+        "rolling": True,
+        "default_max_concurrent": 15,
+        "hard_max_concurrent": 15,
+        "isolated_upstream_module_per_rollout": True,
+    }:
+        raise ValueError("native batch scheduling must remain a rolling HUD semaphore capped at 15")
     if runtime["agent_id"] != "fresh_uuid4_per_rollout":
         raise ValueError("each rollout must use a fresh upstream agent ID")
     if runtime["resume"] or runtime["retries"] != 0:

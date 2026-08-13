@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -81,6 +83,50 @@ def test_exact_run_with_configs_call_and_fresh_receipt(config: NativeOpenHandsCo
     assert task_args.server == "http://127.0.0.1:8666"
     assert not hasattr(task_args, "mask_map_path")
     assert upstream.uuid4().int == 99
+
+
+def test_parallel_calls_use_independent_upstream_modules(
+    monkeypatch: pytest.MonkeyPatch,
+    config: NativeOpenHandsConfig,
+) -> None:
+    barrier = threading.Barrier(2)
+    modules: list[FakeUpstream] = []
+
+    class ConcurrentUpstream(FakeUpstream):
+        def run_with_configs(self, openhands_args, task_args):
+            self.calls.append((openhands_args, task_args))
+            barrier.wait(timeout=3)
+            return self.uuid4().hex
+
+    def load(_root: Path):
+        module = ConcurrentUpstream()
+        modules.append(module)
+        return module
+
+    monkeypatch.setattr("cybergym_hud.native.validate_contract", lambda **_kwargs: None)
+    monkeypatch.setattr("cybergym_hud.native.load_upstream_openhands", load)
+    bindings = [
+        NativeTaskBinding(task_id="arvo:10013", server=config.server),
+        NativeTaskBinding(task_id="oss-fuzz:42535201", server=config.server),
+    ]
+    uuids = [UUID(int=1), UUID(int=2)]
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(
+                execute_upstream_openhands,
+                config,
+                binding,
+                uuid_factory=lambda value=value: value,
+            )
+            for binding, value in zip(bindings, uuids, strict=True)
+        ]
+        receipts = [future.result(timeout=5) for future in futures]
+
+    assert [receipt.status for receipt in receipts] == ["completed", "completed"]
+    assert [receipt.agent_id for receipt in receipts] == [value.hex for value in uuids]
+    assert len({id(module) for module in modules}) == 2
+    assert all(module.uuid4().int == 99 for module in modules)
 
 
 def test_receipt_distinguishes_script_and_paper_budgets(config: NativeOpenHandsConfig) -> None:

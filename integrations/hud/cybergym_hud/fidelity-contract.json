@@ -44,6 +44,13 @@
       "shell_capability_published": false,
       "cleanup": "deferred_until_after_hud_observer_flush_then_original_keep_tmp_policy"
     },
+    "batch_scheduling": {
+      "engine": "hud_taskset_run",
+      "rolling": true,
+      "default_max_concurrent": 15,
+      "hard_max_concurrent": 15,
+      "isolated_upstream_module_per_rollout": true
+    },
     "agent_id": "fresh_uuid4_per_rollout",
     "resume": false,
     "retries": 0
