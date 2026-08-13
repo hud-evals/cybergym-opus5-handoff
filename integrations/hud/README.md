@@ -53,78 +53,179 @@ translate it into HUD-native tool steps.
 The machine-readable version of this boundary is packaged at
 `cybergym_hud/fidelity-contract.json`.
 
-## Prerequisites
+## Fresh native runner setup
 
-Use a private local CyberGym server; never expose it to the public internet.
-Prepare the upstream checkout exactly as its OpenHands example requires:
+Faithful operator runs require a native Linux amd64/x86_64 host, a Linux amd64
+Docker server, Python 3.12, `uv`, Git/Git LFS, Make, Poetry 1.8 or later,
+Node/npm, and enough CPU, RAM, and disk for the selected width. The published
+paper constrained each agent container to 4 CPUs and 8 GB; do not infer that a
+15-wide campaign fits on a 16-GB laptop. Start with the one-task smoke below,
+observe peak use, and increase `--max-concurrent` only on a sized worker.
+macOS, Arm, and cross-architecture emulation are development variance, not this
+native fidelity profile.
+
+From a fresh clone, check out this branch and run the idempotent setup helper:
+
+```bash
+git switch agent/og-fidelity-hud
+integrations/hud/ops/setup.sh
+```
+
+The helper initializes the pinned `examples/agents` submodule, installs the HUD
+integration, pulls the exact OpenHands 0.33 runtime if absent, builds the pinned
+OpenHands checkout if needed, and verifies the fidelity/source contract. It
+makes no model call and reads no secrets. Its `--skip-runtime-image` and
+`--skip-openhands-build` options support pre-provisioned images. The underlying
+manual commands remain:
 
 ```bash
 git submodule update --init --recursive examples/agents
 docker pull docker.all-hands.dev/all-hands-ai/runtime:0.33-nikolaik
-cd examples/agents/openhands/openhands-repo
-make build INSTALL_PLAYWRIGHT=false
-```
-
-The scheduler fails closed if the agent submodule is not at the pinned commit
-or has tracked/untracked changes. It also requires the benchmark data directory,
-the upstream server and target images, working native Docker, a model API key,
-and `CYBERGYM_API_KEY` for the private verification routes.
-
-Install and verify from the CyberGym repository root:
-
-```bash
 uv sync --project integrations/hud --extra test
+(cd examples/agents/openhands/openhands-repo && \
+  make build INSTALL_PLAYWRIGHT=false)
 uv run --project integrations/hud cybergym-hud-verify \
   --repository-root "$PWD"
 ```
 
-## One-shot HUD receipt
+### Task data and grader images
 
-One invocation performs one upstream run with one fresh upstream agent ID and
-no adapter retry or resume:
+The setup helper intentionally does not download the approximately 240-GB
+task corpus or the multi-terabyte full image set. Follow the upstream dataset
+instructions and record the dataset revision used. A minimal Git LFS checkout
+for the documented smoke task can be prepared as follows:
 
 ```bash
-export OPENAI_API_KEY=...
-export CYBERGYM_API_KEY=...
-
-uv run --project integrations/hud cybergym-hud-run-native arvo:10400 \
-  --repository-root "$PWD" \
-  --data-dir /path/to/cybergym_data/data \
-  --server http://127.0.0.1:8666 \
-  --model gpt-4.1-2025-04-14 \
-  --log-dir /path/to/results/logs \
-  --tmp-dir /path/to/results/tmp \
-  --max-iter 100 \
-  --timeout 1200
+GIT_LFS_SKIP_SMUDGE=1 git clone \
+  https://huggingface.co/datasets/sunblaze-ucb/cybergym cybergym_data
+git -C cybergym_data lfs pull --include='data/arvo/10400/**'
+docker pull n132/arvo:10400-vul
+docker pull n132/arvo:10400-fix
 ```
 
-The command prints a JSON HUD receipt. Exit status `2` means runner or grader
+For the upstream ten-task image subset use
+`python scripts/server_data/download_subset.py --max-workers 1`. For a larger
+selection, place the selected task rows in a JSON file and use
+`python scripts/server_data/download.py --tasks-file FILE`; every scheduled row
+needs its task data plus both vulnerable and fixed grader images. These upstream
+image tags are mutable. Record the resolved image IDs/digests with the run.
+
+### Secrets and non-secret operator settings
+
+Never commit, print, or pass a key on a command line. Create a private file
+outside the checkout and load it only in the process that needs it:
+
+```bash
+install -d -m 700 "$HOME/.config/hud-evals"
+install -m 600 integrations/hud/ops/env.example \
+  "$HOME/.config/hud-evals/cybergym.env"
+# Edit cybergym.env, keeping shell-compatible NAME=value lines.
+```
+
+The relevant variables are:
+
+| Purpose | Variable |
+| --- | --- |
+| Upload the HUD Job/Traces | `HUD_API_KEY` |
+| Authenticate private PoC server and grader; values must match | `CYBERGYM_API_KEY` |
+| Bare `claude-*` model | `ANTHROPIC_API_KEY` |
+| `gpt-*`, `o3*`, or `o4*` model | `OPENAI_API_KEY` |
+| Any other upstream model name | `LLM_API_KEY` |
+| Operator paths/model/server | non-secret `CG_*` variables in `env.example` |
+
+`HUD_API_KEY` is not automatically reused as a provider key by this
+benchmark-owned OpenHands loop. When an approved gateway is used, put its key
+in the provider variable selected above and set `CG_MODEL_BASE_URL` to the
+protocol-compatible endpoint. The run command explicitly passes that URL to
+upstream OpenHands. Direct-provider runs leave it empty. The `CG_*` prefix is
+deliberate: arbitrary `CYBERGYM_*` aliases can collide with the server's
+pydantic settings namespace.
+
+### Start the private PoC server
+
+The server must be reachable from both the Linux host and OpenHands containers,
+but must never be public. On a host using Docker's default bridge, bind to its
+queried gateway instead of hard-coding an address. In a dedicated terminal:
+
+```bash
+(
+  set -a
+  . "$HOME/.config/hud-evals/cybergym.env"
+  set +a
+  CG_SERVER_HOST=$(docker network inspect bridge \
+    -f '{{(index .IPAM.Config 0).Gateway}}')
+  export CG_SERVER_URL="http://$CG_SERVER_HOST:8666"
+  exec uv run --project integrations/hud python -m cybergym.server \
+    --host "$CG_SERVER_HOST" --port 8666 \
+    --log_dir "$CG_RESULTS_DIR/server" \
+    --db_path "$CG_RESULTS_DIR/server/poc.db"
+)
+```
+
+Put the same computed `CG_SERVER_URL` in the private environment file used by
+the runner. If a firewall-created internal Docker network is used, query that
+network's gateway instead. Do not use `127.0.0.1`: it points back to each agent
+container from inside Docker.
+
+## No-spend preflight and one-task smoke
+
+Create the result root once, then run the preflight in a secret-scoped
+subshell. It validates native host/Docker identity, source fidelity, the pinned
+OpenHands build/runtime, the exact smoke task's data and two grader images,
+result-directory permissions, required key *presence*, and authenticated
+private-server reachability. It suppresses secret values and makes no model
+call.
+
+```bash
+mkdir -p /path/to/cybergym-results/server
+(
+  set -a
+  . "$HOME/.config/hud-evals/cybergym.env"
+  set +a
+  integrations/hud/ops/preflight.sh
+)
+```
+
+Only after preflight succeeds, explicitly acknowledge provider spend. The
+smoke helper schedules exactly `CG_SMOKE_TASK_ID` at one concurrent slot with
+the upstream script-default 10-iteration/1200-second profile:
+
+```bash
+(
+  set -a
+  . "$HOME/.config/hud-evals/cybergym.env"
+  set +a
+  integrations/hud/ops/smoke.sh --confirm-spend
+)
+```
+
+The smoke refuses to invoke the native scheduler without `--confirm-spend`.
+There is no adapter retry or resume. Exit status `2` means runner or grader
 infrastructure failed; reward `0` with a non-error receipt is a valid benchmark
 failure.
 
-## Rolling batches (15 concurrent by default)
+## Rolling batches (15 concurrent maximum)
 
-The same command accepts multiple task IDs or a deterministic catalog prefix:
+Use explicit task IDs for ordinary campaigns. This example deliberately shows
+two rows; all corresponding data and grader images must already pass preflight
+checks:
 
 ```bash
-uv run --project integrations/hud cybergym-hud-run-native \
-  arvo:10013 arvo:10016 oss-fuzz:42535201 \
-  --repository-root "$PWD" \
-  --data-dir /path/to/cybergym_data/data \
-  --server http://127.0.0.1:8666 \
-  --model claude-sonnet-4-5 \
-  --log-dir /path/to/results/logs \
-  --tmp-dir /path/to/results/tmp
-
-uv run --project integrations/hud cybergym-hud-run-native \
-  --first-n 100 \
-  --repository-root "$PWD" \
-  --data-dir /path/to/cybergym_data/data \
-  --server http://127.0.0.1:8666 \
-  --model claude-sonnet-4-5 \
-  --log-dir /path/to/results/logs \
-  --tmp-dir /path/to/results/tmp \
-  --max-concurrent 15
+(
+  set -a
+  . "$HOME/.config/hud-evals/cybergym.env"
+  set +a
+  uv run --project integrations/hud cybergym-hud-run-native \
+    arvo:10400 arvo:1065 \
+    --repository-root "$PWD" \
+    --data-dir "$CG_DATA_DIR" \
+    --server "$CG_SERVER_URL" \
+    --model "$CG_MODEL" \
+    --base-url "$CG_MODEL_BASE_URL" \
+    --log-dir "$CG_RESULTS_DIR/logs" \
+    --tmp-dir "$CG_RESULTS_DIR/tmp" \
+    --max-iter 100 --timeout 1200 --max-concurrent 15
+)
 ```
 
 This is a rolling HUD `Taskset.run` semaphore, not a sequence of 15-task
@@ -139,28 +240,55 @@ upstream temporary directory, agent UUID, and file-tracking root. Normal runs de
 each temporary root immediately after that row's observer flush. `--keep-tmp`
 retains every root and therefore requires correspondingly more disk.
 
-Running the full paid catalog requires an explicit acknowledgement:
+Running the full 1,507-task paid catalog requires an explicit acknowledgement;
+the CLI applies the same guard if `--first-n` or an explicit ID list happens to
+cover the complete catalog:
 
 ```bash
-uv run --project integrations/hud cybergym-hud-run-native \
-  --all --confirm-paid-all \
-  --repository-root "$PWD" \
-  --data-dir /path/to/cybergym_data/data \
-  --server http://127.0.0.1:8666 \
-  --model claude-sonnet-4-5 \
-  --log-dir /path/to/results/logs \
-  --tmp-dir /path/to/results/tmp
+(
+  set -a
+  . "$HOME/.config/hud-evals/cybergym.env"
+  set +a
+  uv run --project integrations/hud cybergym-hud-run-native \
+    --all --confirm-paid-all \
+    --repository-root "$PWD" \
+    --data-dir "$CG_DATA_DIR" \
+    --server "$CG_SERVER_URL" \
+    --model "$CG_MODEL" \
+    --base-url "$CG_MODEL_BASE_URL" \
+    --log-dir "$CG_RESULTS_DIR/logs" \
+    --tmp-dir "$CG_RESULTS_DIR/tmp" \
+    --max-iter 100 --timeout 1200 --max-concurrent 15
+)
 ```
 
-The same guard applies if `--first-n` or an explicit ID list covers all 1,507
-tasks. Batch output is one JSON object containing the HUD job ID, aggregate
-counts, and the ordered per-task receipts. A one-ID invocation retains the
-original one-shot JSON shape.
+Do not run that command merely to test setup. Batch output is one JSON object
+containing the HUD Job ID, aggregate counts, and ordered per-task receipts. A
+one-ID invocation retains the original one-shot JSON shape and includes its
+Job and Trace IDs. With `HUD_API_KEY` set, open them at
+`https://www.hud.ai/jobs/JOB_ID` and `https://www.hud.ai/trace/TRACE_ID`.
 
 `cybergym_hud.taskset.make_taskset(...)` exposes all 1,507 pinned catalog rows
 (1,368 ARVO and 139 OSS-Fuzz) for programmatic scheduling. Native runs are
 resource-heavy; lower `--max-concurrent` when the native Docker host cannot
 sustain 15 independent containers.
+
+## Artifacts, file tracking, and cleanup
+
+- HUD `filetracking/1` observes only each rollout's real OpenHands workspace;
+  it adds no shell or model tool. The full model/tool trajectory remains under
+  `CG_RESULTS_DIR/logs`, not in HUD-native tool steps.
+- Normal runs delete their trace-private temporary root only after HUD flushes
+  the final file diff. `--keep-tmp` opts out and can consume substantial disk.
+- Stop the PoC server with `Ctrl-C` after all graders finish. Do not delete its
+  database or logs until receipts and task-level evidence are reconciled.
+- Scheduler cancellation waits for active upstream workers to reach their
+  timeout/cleanup path. Before removing a leftover container, verify no live
+  scheduler owns it; never use an unscoped `docker rm`/`docker system prune` on
+  a shared worker.
+- Preserve the printed receipt JSON, resolved image IDs/digests, benchmark and
+  agent commits, non-secret run settings, OpenHands logs, and HUD Job/Trace
+  links as the comparison record.
 
 ## Exact upstream passthroughs
 
