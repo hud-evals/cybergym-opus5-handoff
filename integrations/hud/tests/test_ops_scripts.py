@@ -15,6 +15,7 @@ SCRIPTS = tuple(
         "smoke.sh",
         "configure-secrets.sh",
         "install-service.sh",
+        "install-campaign-service.sh",
         "server.sh",
         "cybergym-ops",
     )
@@ -270,6 +271,18 @@ def test_private_server_is_unmasked_and_docker_bridge_only() -> None:
     assert "systemctl restart cybergym-server.service" in installer
     assert "systemctl is-active --quiet cybergym-server.service" in installer
     assert "LimitCORE=0" in installer
+
+
+def test_campaign_service_is_preflighted_durable_and_does_not_error_loop() -> None:
+    installer = (OPS / "install-campaign-service.sh").read_text(encoding="utf-8")
+    assert "campaign-preflight --max-concurrent 4" in installer
+    assert "--confirm-paid-all --max-concurrent 4 --shard-size 12" in installer
+    assert "Restart=on-abnormal" in installer
+    assert "Restart=on-failure" not in installer
+    assert "cybergym-server.service" in installer
+    assert "LimitCORE=0" in installer
+    assert "systemctl enable cybergym-campaign.service" in installer
+    assert "systemctl start cybergym-campaign.service" in installer
 
 
 def test_readme_covers_operator_handoff_and_spend_guards() -> None:

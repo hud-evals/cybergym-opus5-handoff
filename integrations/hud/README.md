@@ -404,6 +404,20 @@ integrations/hud/ops/cybergym-ops campaign \
   --confirm-paid-all --max-concurrent 1
 ```
 
+For the reviewed multi-day VM campaign, install it as a service instead of
+leaving it attached to SSH. The installer first runs the full no-inference
+preflight as the operator, then starts fixed rolling width 4 and shard size 12:
+
+```bash
+sudo integrations/hud/ops/install-campaign-service.sh --confirm-paid-all \
+  --operator rose --repository-root "$PWD"
+systemctl status cybergym-campaign.service
+```
+
+The unit starts again after a host reboot or abnormal signal, but deliberately
+does not loop on an explicit campaign/preflight failure. Inspect the last
+mode-0600 shard receipt and restart it manually after resolving the cause.
+
 The same command resumes the same manifest. The catalog is partitioned in
 sorted, deterministic 12-task shards by default (`--shard-size 1..24`). Each
 attempt gets its own HUD Job, all named exactly `cybergym-gpt5.6-sol`, and an
