@@ -10,6 +10,7 @@ SCRIPTS = tuple(
     OPS / name
     for name in (
         "setup.sh",
+        "runtime-image.sh",
         "preflight.sh",
         "smoke.sh",
         "configure-secrets.sh",
@@ -60,6 +61,92 @@ def test_preflight_contains_no_native_model_runner() -> None:
     assert 'IFS= read -r RUNNER_IMAGE <"$BINARY_TASK/$mode/runner"' in text
     assert "git-lfs.github.com/spec/v1" in text
     assert 'tar -tzf "$TASK_DATA/repo-vul.tar.gz"' in text
+    assert '"$SCRIPT_DIR/runtime-image.sh" verify' in text
+
+
+def test_runtime_recovery_uses_exact_official_artifact_and_preserves_upstream_tag(tmp_path: Path) -> None:
+    setup = (OPS / "setup.sh").read_text(encoding="utf-8")
+    helper = (OPS / "runtime-image.sh").read_text(encoding="utf-8")
+    assert '"$SCRIPT_DIR/runtime-image.sh" ensure' in setup
+    assert "docker.all-hands.dev/all-hands-ai/runtime:0.33-nikolaik" in helper
+    assert "ghcr.io/all-hands-ai/runtime" in helper
+    assert "sha256:290784f8564ab5585025dc155cbfc39c3a5bb952511811f85b7371179e4dc446" in helper
+    assert "sha256:ff8d9ef50ceb475130de5bca59d5c8f4dc9c45e11566ebaa6cae6a95b388d989" in helper
+    assert "sha256:f29a0b0a27ea307e0a7aee2a538ad75bdd41cc2db85cfd9e0ac7fe355ca8cacb" in helper
+    assert 'docker pull --platform linux/amd64 "$SOURCE_REF"' in helper
+    assert 'docker tag "$SOURCE_REF" "$ORIGINAL_REF"' in helper
+    assert "https://docker.all-hands.dev" not in helper
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text(
+        """#!/bin/sh
+set -eu
+state=${FAKE_DOCKER_STATE:?}
+log=${FAKE_DOCKER_LOG:?}
+source_ref='ghcr.io/all-hands-ai/runtime@sha256:ff8d9ef50ceb475130de5bca59d5c8f4dc9c45e11566ebaa6cae6a95b388d989'
+original_ref='docker.all-hands.dev/all-hands-ai/runtime:0.33-nikolaik'
+if [ "$1 $2" = 'image inspect' ]; then
+    if [ "${3-}" = '--format' ]; then
+        format=$4
+        ref=$5
+    else
+        ref=$3
+        [ -f "$state/source" ] && exit 0
+        exit 1
+    fi
+    case "$ref" in
+        "$source_ref") [ -f "$state/source" ] || exit 1 ;;
+        "$original_ref") [ -f "$state/original" ] || exit 1 ;;
+        *) exit 1 ;;
+    esac
+    case "$format" in
+        '{{.Id}}') echo 'sha256:f29a0b0a27ea307e0a7aee2a538ad75bdd41cc2db85cfd9e0ac7fe355ca8cacb' ;;
+        '{{.Os}}/{{.Architecture}}') echo 'linux/amd64' ;;
+        '{{range .RepoDigests}}{{println .}}{{end}}') echo "$source_ref" ;;
+        '{{range .RepoTags}}{{println .}}{{end}}') echo "$original_ref" ;;
+        *) exit 1 ;;
+    esac
+elif [ "$1" = pull ]; then
+    printf '%s\\n' "$*" >>"$log"
+    : >"$state/source"
+elif [ "$1" = tag ]; then
+    printf '%s\\n' "$*" >>"$log"
+    [ -f "$state/source" ]
+    : >"$state/original"
+else
+    exit 1
+fi
+""",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+    state = tmp_path / "state"
+    state.mkdir()
+    log = tmp_path / "docker.log"
+    env = {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_DOCKER_STATE": str(state),
+        "FAKE_DOCKER_LOG": str(log),
+    }
+    ensured = _run(str(OPS / "runtime-image.sh"), "ensure", env=env)
+    assert ensured.returncode == 0, ensured.stderr
+    ensured_again = _run(str(OPS / "runtime-image.sh"), "ensure", env=env)
+    assert ensured_again.returncode == 0, ensured_again.stderr
+    verified = _run(str(OPS / "runtime-image.sh"), "verify", env=env)
+    assert verified.returncode == 0, verified.stderr
+    calls = log.read_text(encoding="utf-8").splitlines()
+    assert calls == [
+        "pull --platform linux/amd64 "
+        "ghcr.io/all-hands-ai/runtime@sha256:ff8d9ef50ceb475130de5bca59d5c8f4dc9c45e11566ebaa6cae6a95b388d989",
+        "tag "
+        "ghcr.io/all-hands-ai/runtime@sha256:ff8d9ef50ceb475130de5bca59d5c8f4dc9c45e11566ebaa6cae6a95b388d989 "
+        "docker.all-hands.dev/all-hands-ai/runtime:0.33-nikolaik",
+        "tag "
+        "ghcr.io/all-hands-ai/runtime@sha256:ff8d9ef50ceb475130de5bca59d5c8f4dc9c45e11566ebaa6cae6a95b388d989 "
+        "docker.all-hands.dev/all-hands-ai/runtime:0.33-nikolaik",
+    ]
 
 
 def test_smoke_refuses_spend_before_preflight_or_uv() -> None:

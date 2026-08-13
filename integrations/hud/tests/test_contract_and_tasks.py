@@ -15,6 +15,15 @@ def test_packaged_contract_and_checkout_are_pinned() -> None:
     validate_contract()
     assert CONTRACT["runtime"]["canonical"] == "native_docker_via_upstream_openhands"
     assert CONTRACT["runtime"]["daytona_canonical"] is False
+    assert CONTRACT["runtime"]["openhands_container_image"] == {
+        "upstream_reference": "docker.all-hands.dev/all-hands-ai/runtime:0.33-nikolaik",
+        "official_repository": "ghcr.io/all-hands-ai/runtime",
+        "index_digest": "sha256:290784f8564ab5585025dc155cbfc39c3a5bb952511811f85b7371179e4dc446",
+        "platform": "linux/amd64",
+        "platform_manifest_digest": "sha256:ff8d9ef50ceb475130de5bca59d5c8f4dc9c45e11566ebaa6cae6a95b388d989",
+        "config_digest": "sha256:f29a0b0a27ea307e0a7aee2a538ad75bdd41cc2db85cfd9e0ac7fe355ca8cacb",
+        "recovery": "pull_official_ghcr_immutable_platform_manifest_then_apply_upstream_reference_as_local_tag",
+    }
     assert CONTRACT["runtime"]["file_tracking"] == {
         "protocol": "filetracking/1",
         "root": "unique_upstream_openhands_tmp_dir_per_rollout",

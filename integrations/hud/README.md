@@ -72,7 +72,7 @@ integrations/hud/ops/setup.sh
 ```
 
 The helper initializes the pinned `examples/agents` submodule, installs the HUD
-integration, pulls the exact OpenHands 0.33 runtime if absent, builds the pinned
+integration, recovers the exact OpenHands 0.33 runtime if absent, builds the pinned
 OpenHands checkout if needed, and verifies the fidelity/source contract. It
 makes no model call and reads no secrets. Its `--skip-runtime-image` and
 `--skip-openhands-build` options support pre-provisioned images. The underlying
@@ -80,13 +80,33 @@ manual commands remain:
 
 ```bash
 git submodule update --init --recursive examples/agents
-docker pull docker.all-hands.dev/all-hands-ai/runtime:0.33-nikolaik
+integrations/hud/ops/runtime-image.sh ensure
 uv sync --project integrations/hud --extra test
 (cd examples/agents/openhands/openhands-repo && \
   make build INSTALL_PLAYWRIGHT=false)
 uv run --project integrations/hud cybergym-hud-verify \
   --repository-root "$PWD"
 ```
+
+The paper-era runtime reference is
+`docker.all-hands.dev/all-hands-ai/runtime:0.33-nikolaik`. That retired
+hostname was a Scarf gateway to OpenHands' official GHCR package and no longer
+has DNS. OpenHands' 0.33 source and CI also name
+`ghcr.io/all-hands-ai/runtime`, and the official `0.33-nikolaik`,
+`35b381f-nikolaik`, and full release-commit tags resolve to the same manifest
+list. The helper therefore pulls the immutable official GHCR amd64 child and
+applies the original reference as a **local** tag; it never contacts the dead
+hostname or changes the protected upstream OpenHands/CyberGym configuration.
+
+The frozen identity is index
+`sha256:290784f8564ab5585025dc155cbfc39c3a5bb952511811f85b7371179e4dc446`,
+linux/amd64 manifest
+`sha256:ff8d9ef50ceb475130de5bca59d5c8f4dc9c45e11566ebaa6cae6a95b388d989`,
+and config/image ID
+`sha256:f29a0b0a27ea307e0a7aee2a538ad75bdd41cc2db85cfd9e0ac7fe355ca8cacb`.
+Preflight checks all locally observable identity fields and refuses a merely
+name-compatible substitute. A registry rebuild from source is not considered
+byte-identical and is outside this fidelity path.
 
 ### Task data and grader runtime
 

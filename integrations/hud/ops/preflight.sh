@@ -15,7 +15,6 @@ MODEL_BASE_URL=${CG_MODEL_BASE_URL:-}
 RESULTS_DIR=${CG_RESULTS_DIR:-}
 SERVER_MODE=${CG_SERVER_MODE:-images}
 SERVER_BINARY_DIR=${CG_SERVER_BINARY_DIR:-}
-RUNTIME_IMAGE=docker.all-hands.dev/all-hands-ai/runtime:0.33-nikolaik
 
 usage() {
     cat <<'EOF'
@@ -143,9 +142,9 @@ OPENHANDS_ROOT=$REPOSITORY_ROOT/examples/agents/openhands/openhands-repo
     || die "pinned OpenHands Python environment is not built; run ops/setup.sh"
 ok 'pinned OpenHands build'
 
-docker image inspect "$RUNTIME_IMAGE" >/dev/null 2>&1 \
-    || die "missing OpenHands runtime image: $RUNTIME_IMAGE"
-ok 'pinned OpenHands runtime image'
+"$SCRIPT_DIR/runtime-image.sh" verify >/dev/null \
+    || die "OpenHands runtime is missing or has the wrong immutable identity; run ops/runtime-image.sh ensure"
+ok 'exact pinned OpenHands amd64 runtime image and paper-era local tag'
 
 case "$TASK_ID" in
     arvo:*)

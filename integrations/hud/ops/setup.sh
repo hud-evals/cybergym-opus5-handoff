@@ -8,7 +8,6 @@ DEFAULT_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)
 REPOSITORY_ROOT=${CG_REPOSITORY_ROOT:-$DEFAULT_ROOT}
 SKIP_RUNTIME_IMAGE=0
 SKIP_OPENHANDS_BUILD=0
-RUNTIME_IMAGE=docker.all-hands.dev/all-hands-ai/runtime:0.33-nikolaik
 
 usage() {
     cat <<'EOF'
@@ -83,12 +82,7 @@ printf '%s\n' 'Installing the HUD integration...'
 uv sync --project "$REPOSITORY_ROOT/integrations/hud" --extra test
 
 if [ "$SKIP_RUNTIME_IMAGE" -eq 0 ]; then
-    if docker image inspect "$RUNTIME_IMAGE" >/dev/null 2>&1; then
-        printf 'OpenHands runtime image already present: %s\n' "$RUNTIME_IMAGE"
-    else
-        printf 'Pulling pinned OpenHands runtime image: %s\n' "$RUNTIME_IMAGE"
-        docker pull "$RUNTIME_IMAGE"
-    fi
+    "$SCRIPT_DIR/runtime-image.sh" ensure
 fi
 
 OPENHANDS_ROOT=$REPOSITORY_ROOT/examples/agents/openhands/openhands-repo
