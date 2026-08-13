@@ -105,6 +105,14 @@ evidence without changing anything visible inside `/workspace`. A
 continues to live in OpenHands' upstream log output; this adapter does not
 translate it into HUD-native tool steps.
 
+Pinned OpenHands reports ordinary headless max-iteration exhaustion through
+its generic controller `error` state, while original CyberGym accepts the saved
+trajectory and still grades submitted PoCs. The adapter therefore treats only
+the exact terminal sentinel whose current and maximum iteration both equal the
+receipted `max_iter` as a completed, gradeable run. Provider errors, monetary
+budget sentinels (this profile configures no monetary budget), mismatched
+limits, and mixed controller errors remain infrastructure errors.
+
 The machine-readable version of this boundary is packaged at
 `cybergym_hud/fidelity-contract.json`.
 
@@ -334,7 +342,8 @@ the upstream script-default 10-iteration/1200-second profile:
 The smoke refuses to invoke the native scheduler without `--confirm-spend`.
 There is no adapter retry or resume. Exit status `2` means runner or grader
 infrastructure failed; reward `0` with a non-error receipt is a valid benchmark
-failure.
+failure. Reaching the smoke's 10-iteration ceiling is also a normal graded
+outcome; use the documented 100-iteration profile for benchmark campaigns.
 
 ## Rolling batches (15 concurrent maximum)
 

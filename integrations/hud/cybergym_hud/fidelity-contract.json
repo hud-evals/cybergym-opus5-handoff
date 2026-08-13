@@ -82,6 +82,11 @@
       }
     },
     "agent_id": "fresh_uuid4_per_rollout",
+    "controller_termination": {
+      "configured_max_iteration_sentinel": "completed_and_graded_like_upstream",
+      "all_other_controller_errors": "non_reportable_infrastructure_error",
+      "monetary_budget_configured": false
+    },
     "grader_server_profiles": {
       "images": "upstream_per_task_vulnerable_and_fixed_docker_images",
       "binary": "upstream_published_binary_only_server_reported_separately"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import re
 import stat
 from collections.abc import Callable, Mapping
 from concurrent.futures import Executor
@@ -20,6 +21,11 @@ from hud.types import Step
 from .contract import repository_root, validate_contract
 from .receipt import NativeReceipt, NativeRunProfile, NativeTaskBinding, normalize_server
 from .upstream import require_upstream_agent_checkout
+
+_MAX_ITERATION_REASON = re.compile(
+    r"^RuntimeError: Agent reached maximum iteration in headless mode\. "
+    r"Current iteration: (?P<current>[0-9]+), max iteration: (?P<maximum>[0-9]+)$"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,23 +129,109 @@ def load_upstream_openhands(root: Path) -> ModuleType:
     return module
 
 
-def _controller_entered_error(receipt_log_dir: Path) -> bool:
-    """Detect OpenHands' zero-exit controller failure without exposing its reason."""
-
-    logs_dir = receipt_log_dir / "logs"
-    if not logs_dir.is_dir():
-        return False
-    for log_path in sorted(logs_dir.glob("openhands_*.log")):
+def _classify_error_reasons(reasons: list[str], *, max_iter: int) -> Literal["none", "max_iterations", "error"]:
+    if not reasons:
+        return "none"
+    for reason in reasons:
+        match = _MAX_ITERATION_REASON.fullmatch(reason)
+        if match is None:
+            return "error"
         try:
+            current = int(match.group("current"))
+            maximum = int(match.group("maximum"))
+        except ValueError:
+            return "error"
+        if current != max_iter or maximum != max_iter:
+            return "error"
+    return "max_iterations"
+
+
+def _log_controller_termination(
+    logs_dir: Path,
+    *,
+    max_iter: int,
+) -> Literal["none", "max_iterations", "error"]:
+    if not logs_dir.is_dir():
+        return "none"
+    expected_reason = (
+        "RuntimeError: Agent reached maximum iteration in headless mode. "
+        f"Current iteration: {max_iter}, max iteration: {max_iter}"
+    )
+    error_lines: list[bool] = []
+    try:
+        log_paths = sorted(logs_dir.glob("openhands_*.log"))
+        for log_path in log_paths:
             if not stat.S_ISREG(log_path.stat(follow_symlinks=False).st_mode):
-                continue
+                return "error"
             with log_path.open(encoding="utf-8", errors="replace") as handle:
                 for line in handle:
                     if "AgentStateChangedObservation(" in line and "agent_state='error'" in line:
-                        return True
-        except OSError:
-            continue
-    return False
+                        error_lines.append(f"reason={expected_reason!r}" in line)
+    except OSError:
+        return "error"
+    if not error_lines:
+        return "none"
+    return "max_iterations" if all(error_lines) else "error"
+
+
+def _controller_termination(
+    receipt_log_dir: Path,
+    *,
+    max_iter: int,
+) -> Literal["none", "max_iterations", "error"]:
+    """Classify pinned OpenHands' zero-exit controller terminal state.
+
+    OpenHands 0.33 represents normal headless iteration exhaustion as
+    ``AgentState.ERROR``.  Original CyberGym nevertheless accepts any saved
+    trajectory and grades it.  Preserve that behavior only for the exact,
+    configured max-iteration sentinel; every other controller error remains
+    a non-reportable infrastructure failure.
+    """
+
+    events_root = receipt_log_dir / "file" / "sessions"
+    try:
+        event_paths = sorted(events_root.glob("*/events/*.json")) if events_root.is_dir() else []
+    except OSError:
+        return "error"
+    event_termination: Literal["none", "max_iterations", "error"] = "none"
+    if event_paths:
+        reasons: list[str] = []
+        try:
+            for event_path in event_paths:
+                if not stat.S_ISREG(event_path.stat(follow_symlinks=False).st_mode):
+                    return "error"
+                event = json.loads(event_path.read_text(encoding="utf-8"))
+                if not isinstance(event, dict):
+                    return "error"
+                if event.get("observation") != "agent_state_changed":
+                    continue
+                extras = event.get("extras")
+                if event.get("source") != "environment" or not isinstance(extras, dict):
+                    return "error"
+                agent_state = extras.get("agent_state")
+                if not isinstance(agent_state, str):
+                    return "error"
+                if agent_state != "error":
+                    continue
+                reason = extras.get("reason")
+                if not isinstance(reason, str):
+                    return "error"
+                reasons.append(reason)
+        except (OSError, ValueError, TypeError):
+            return "error"
+        event_termination = _classify_error_reasons(reasons, max_iter=max_iter)
+        if event_termination == "error":
+            return "error"
+
+    # Early controller failures may not persist the canonical event store.
+    # Cross-check it even when canonical events exist so a partial event store
+    # cannot hide a later error that OpenHands logged.
+    log_termination = _log_controller_termination(receipt_log_dir / "logs", max_iter=max_iter)
+    if log_termination == "error":
+        return "error"
+    if event_termination == "max_iterations" or log_termination == "max_iterations":
+        return "max_iterations"
+    return "none"
 
 
 class _OpenHandsSubprocessProxy:
@@ -276,7 +368,8 @@ def execute_upstream_openhands(
             log_dir=str(receipt_log_dir),
             error="upstream run_with_configs did not produce a valid trajectory receipt",
         )
-    if _controller_entered_error(receipt_log_dir):
+    controller_termination = _controller_termination(receipt_log_dir, max_iter=config.max_iter)
+    if controller_termination == "error":
         return NativeReceipt(
             status="error",
             task_id=binding.task_id,

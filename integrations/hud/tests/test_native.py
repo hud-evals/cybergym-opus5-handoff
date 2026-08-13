@@ -18,6 +18,8 @@ from cybergym_hud.env import build_env
 from cybergym_hud.native import (
     NativeOpenHandsAgent,
     NativeOpenHandsConfig,
+    _classify_error_reasons,
+    _controller_termination,
     _OpenHandsSubprocessProxy,
     execute_upstream_openhands,
 )
@@ -213,6 +215,131 @@ def test_zero_exit_openhands_controller_error_becomes_infra_receipt(config: Nati
     assert receipt.upstream_returned_agent_id == UUID(int=8).hex
     assert "error state" in receipt.error
     assert "private provider diagnostic" not in receipt.error
+
+
+class StructuredControllerUpstream(FakeUpstream):
+    def __init__(self, reasons: list[str]):
+        super().__init__()
+        self.reasons = reasons
+
+    def run_with_configs(self, openhands_args, task_args):
+        agent_id = self.uuid4().hex
+        receipt_dir = openhands_args.log_dir / f"{task_args.task_id.replace(':', '_')}-{agent_id}"
+        events_dir = receipt_dir / "file" / "sessions" / "session" / "events"
+        events_dir.mkdir(parents=True)
+        for index, reason in enumerate(self.reasons):
+            (events_dir / f"{index:04}.json").write_text(
+                json.dumps(
+                    {
+                        "source": "environment",
+                        "observation": "agent_state_changed",
+                        "extras": {"agent_state": "error", "reason": reason},
+                    }
+                ),
+                encoding="utf-8",
+            )
+        return agent_id
+
+
+def test_exact_max_iteration_controller_state_is_canonical_completion(config: NativeOpenHandsConfig) -> None:
+    reason = "RuntimeError: Agent reached maximum iteration in headless mode. Current iteration: 17, max iteration: 17"
+    receipt = execute_upstream_openhands(
+        config,
+        NativeTaskBinding(task_id="arvo:10013", server=config.server),
+        module=StructuredControllerUpstream([reason]),
+        uuid_factory=lambda: UUID(int=9),
+    )
+
+    assert receipt.status == "completed"
+    assert receipt.error is None
+    assert receipt.upstream_returned_agent_id == UUID(int=9).hex
+
+
+@pytest.mark.parametrize(
+    "reasons",
+    [
+        ["RuntimeError: Agent reached maximum iteration in headless mode. Current iteration: 10, max iteration: 10"],
+        ["RuntimeError: Agent reached maximum budget in headless mode. Current budget: 1.50, max budget: 1.50"],
+        [
+            "RuntimeError: Agent reached maximum iteration in headless mode. Current iteration: 17, max iteration: 17",
+            "private provider diagnostic",
+        ],
+    ],
+)
+def test_mismatched_or_mixed_controller_errors_remain_infra(
+    config: NativeOpenHandsConfig,
+    reasons: list[str],
+) -> None:
+    receipt = execute_upstream_openhands(
+        config,
+        NativeTaskBinding(task_id="arvo:10013", server=config.server),
+        module=StructuredControllerUpstream(reasons),
+        uuid_factory=lambda: UUID(int=10),
+    )
+
+    assert receipt.status == "error"
+    assert "error state" in receipt.error
+
+
+def test_structured_max_iteration_cannot_mask_later_logged_provider_error(tmp_path: Path) -> None:
+    receipt_dir = tmp_path / "run"
+    events_dir = receipt_dir / "file" / "sessions" / "session" / "events"
+    events_dir.mkdir(parents=True)
+    (events_dir / "0000.json").write_text(
+        json.dumps(
+            {
+                "source": "environment",
+                "observation": "agent_state_changed",
+                "extras": {
+                    "agent_state": "error",
+                    "reason": (
+                        "RuntimeError: Agent reached maximum iteration in headless mode. "
+                        "Current iteration: 17, max iteration: 17"
+                    ),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    logs_dir = receipt_dir / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "openhands_test.log").write_text(
+        "AgentStateChangedObservation(content='', agent_state='error', reason='private provider diagnostic')\n",
+        encoding="utf-8",
+    )
+
+    assert _controller_termination(receipt_dir, max_iter=17) == "error"
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        [],
+        {"source": "environment", "observation": "agent_state_changed", "extras": None},
+        {
+            "source": "environment",
+            "observation": "agent_state_changed",
+            "extras": {"agent_state": None, "reason": ""},
+        },
+    ],
+)
+def test_malformed_canonical_state_event_fails_closed(tmp_path: Path, event: object) -> None:
+    receipt_dir = tmp_path / "run"
+    events_dir = receipt_dir / "file" / "sessions" / "session" / "events"
+    events_dir.mkdir(parents=True)
+    (events_dir / "0000.json").write_text(json.dumps(event), encoding="utf-8")
+
+    assert _controller_termination(receipt_dir, max_iter=17) == "error"
+
+
+def test_overlong_iteration_sentinel_fails_closed() -> None:
+    reason = (
+        "RuntimeError: Agent reached maximum iteration in headless mode. Current iteration: "
+        + "9" * 5000
+        + ", max iteration: "
+        + "9" * 5000
+    )
+    assert _classify_error_reasons([reason], max_iter=17) == "error"
 
 
 @pytest.mark.asyncio
