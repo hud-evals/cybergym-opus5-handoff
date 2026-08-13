@@ -102,7 +102,14 @@ if [ "$1 $2" = 'image inspect' ]; then
         *) exit 1 ;;
     esac
     case "$format" in
-        '{{.Id}}') echo 'sha256:f29a0b0a27ea307e0a7aee2a538ad75bdd41cc2db85cfd9e0ac7fe355ca8cacb' ;;
+        '{{.Id}}')
+            if [ "${FAKE_DOCKER_ID_MODE:-config}" = manifest ]; then
+                echo 'sha256:ff8d9ef50ceb475130de5bca59d5c8f4dc9c45e11566ebaa6cae6a95b388d989'
+            else
+                echo 'sha256:f29a0b0a27ea307e0a7aee2a538ad75bdd41cc2db85cfd9e0ac7fe355ca8cacb'
+            fi
+            ;;
+        '{{.Descriptor.digest}}') echo 'sha256:ff8d9ef50ceb475130de5bca59d5c8f4dc9c45e11566ebaa6cae6a95b388d989' ;;
         '{{.Os}}/{{.Architecture}}') echo 'linux/amd64' ;;
         '{{range .RepoDigests}}{{println .}}{{end}}') echo "$source_ref" ;;
         '{{range .RepoTags}}{{println .}}{{end}}') echo "$original_ref" ;;
@@ -136,6 +143,9 @@ fi
     assert ensured_again.returncode == 0, ensured_again.stderr
     verified = _run(str(OPS / "runtime-image.sh"), "verify", env=env)
     assert verified.returncode == 0, verified.stderr
+    containerd_env = {**env, "FAKE_DOCKER_ID_MODE": "manifest"}
+    containerd_verified = _run(str(OPS / "runtime-image.sh"), "verify", env=containerd_env)
+    assert containerd_verified.returncode == 0, containerd_verified.stderr
     calls = log.read_text(encoding="utf-8").splitlines()
     assert calls == [
         "pull --platform linux/amd64 "

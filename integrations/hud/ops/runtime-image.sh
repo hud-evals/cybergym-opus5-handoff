@@ -49,8 +49,23 @@ source_matches() {
 verify_source() {
     SOURCE_ID=$(image_field '{{.Id}}' "$SOURCE_REF") \
         || die "missing immutable OpenHands runtime source: $SOURCE_REF"
-    [ "$SOURCE_ID" = "$CONFIG_DIGEST" ] \
-        || die "source image config is $SOURCE_ID, expected $CONFIG_DIGEST"
+    case "$SOURCE_ID" in
+        "$CONFIG_DIGEST")
+            # Docker's classic image store exposes the config digest as .Id.
+            ;;
+        "$AMD64_MANIFEST_DIGEST")
+            # Docker's containerd image store exposes the manifest digest as
+            # .Id. In that mode Descriptor must independently attest the same
+            # immutable manifest selected by SOURCE_REF.
+            SOURCE_DESCRIPTOR=$(image_field '{{.Descriptor.digest}}' "$SOURCE_REF") \
+                || die "could not inspect the containerd image descriptor"
+            [ "$SOURCE_DESCRIPTOR" = "$AMD64_MANIFEST_DIGEST" ] \
+                || die "source descriptor is $SOURCE_DESCRIPTOR, expected $AMD64_MANIFEST_DIGEST"
+            ;;
+        *)
+            die "source image ID is $SOURCE_ID, expected config $CONFIG_DIGEST or manifest $AMD64_MANIFEST_DIGEST"
+            ;;
+    esac
 
     SOURCE_PLATFORM=$(image_field '{{.Os}}/{{.Architecture}}' "$SOURCE_REF") \
         || die "could not inspect immutable OpenHands runtime source"
@@ -65,8 +80,8 @@ verify_source() {
 verify_original_tag() {
     ORIGINAL_ID=$(image_field '{{.Id}}' "$ORIGINAL_REF") \
         || die "missing original OpenHands runtime tag: $ORIGINAL_REF"
-    [ "$ORIGINAL_ID" = "$CONFIG_DIGEST" ] \
-        || die "original runtime tag resolves to $ORIGINAL_ID, expected $CONFIG_DIGEST"
+    [ "$ORIGINAL_ID" = "$SOURCE_ID" ] \
+        || die "original runtime tag resolves to $ORIGINAL_ID, expected source image $SOURCE_ID"
 
     ORIGINAL_PLATFORM=$(image_field '{{.Os}}/{{.Architecture}}' "$ORIGINAL_REF") \
         || die "could not inspect original OpenHands runtime tag"
