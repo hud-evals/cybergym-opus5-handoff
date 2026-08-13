@@ -214,7 +214,7 @@ socket, and binary directory to that seal:
 
 ```bash
 sudo chown -hR root:root /srv/cybergym/cybergym-server-data
-sudo uv run --frozen --project integrations/hud \
+sudo uv run --frozen --no-sync --project integrations/hud \
   cybergym-hud-attest-grader capture \
   --repository-root "$PWD" \
   --binary-dir /srv/cybergym/cybergym-server-data \
