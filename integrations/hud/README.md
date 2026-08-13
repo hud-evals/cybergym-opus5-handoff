@@ -349,6 +349,54 @@ infrastructure failed; reward `0` with a non-error receipt is a valid benchmark
 failure. Reaching the smoke's 10-iteration ceiling is also a normal graded
 outcome; use the documented 100-iteration profile for benchmark campaigns.
 
+## Restart-safe 200-iteration full-catalog campaign
+
+The durable campaign operator fixes the requested arm to `gpt-5.6-sol` with
+`xhigh` reasoning, 200 maximum OpenHands iterations, a 3,600-second per-task
+timeout, the unchanged native task setup/grader, and the exact HUD Job name
+`cybergym-gpt5.6-sol`. This is a clearly receipted custom budget profile; it is
+not the paper's 100-iteration/1,200-second profile.
+
+First validate the entire 1,507-task corpus without inference or provider
+spend. In addition to the common preflight, this reads every description and
+source tarball, verifies every selected image/binary grader artifact, records
+source/grader SHA-256 fingerprints, and checks worker capacity for the
+requested width:
+
+```bash
+integrations/hud/ops/cybergym-ops campaign-preflight --max-concurrent 1
+```
+
+Only after that succeeds, explicitly acknowledge the complete paid catalog:
+
+```bash
+integrations/hud/ops/cybergym-ops campaign \
+  --confirm-paid-all --max-concurrent 1
+```
+
+The same command resumes the same manifest. The catalog is partitioned in
+sorted, deterministic 12-task shards by default (`--shard-size 1..24`). Each
+attempt gets its own HUD Job, all named exactly `cybergym-gpt5.6-sol`, and an
+atomically written mode-0600 summary under
+`$CG_RESULTS_DIR/campaign-gpt56-sol-200/shards/`. The manifest is journaled
+before each native executor can call the model. On restart, terminal/rewarded
+HUD traces with nonempty events are retained and never rerun; rows that never
+crossed the durable launch marker remain eligible for a later attempt. A
+launched row with no verifiable terminal HUD receipt blocks the campaign
+instead of risking duplicate provider spend. A verified infrastructure-error
+shard also stops later spend; inspect it and use `--continue-after-errors` only
+to skip those already-paid rows and proceed.
+
+Rolling width is configurable from 1 through 6, but the no-spend capacity gate
+requires 4 CPUs and 8 GiB per active OpenHands sandbox plus 2 GiB host reserve.
+Consequently an 8-vCPU/16-GiB worker is admitted at width 1; width 2 requires
+at least 8 CPUs and 18 GiB, and width 6 requires at least 24 CPUs and 50 GiB.
+Within a shard the scheduler is rolling: completion of one full
+OpenHands/Docker lifecycle releases the next row immediately. Provider, HUD,
+and CyberGym keys remain environment-only; the operator never places them in
+argv, manifests, summaries, or its logs. `CG_MODEL_BASE_URL` is also read from
+the environment rather than passed on the command line.
+
 ## Rolling batches (15 concurrent maximum)
 
 Use explicit task IDs for ordinary campaigns. This example deliberately shows

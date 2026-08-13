@@ -18,6 +18,8 @@ Commands:
   setup                 Install/build the pinned no-model runner
   preflight             Authenticate and validate without a model call
   smoke --confirm-spend Run one arvo:10400 rollout at concurrency 1
+  campaign-preflight    Validate all 1,507 tasks without a model call
+  campaign              Resume the spend-gated 200-step full campaign
   server-status         Show the private server service state
 EOF
 }
@@ -30,7 +32,7 @@ case "$COMMAND" in
     -h|--help|help) usage; exit 0 ;;
     setup) exec "$SCRIPT_DIR/setup.sh" "$@" ;;
     server-status) exec systemctl status --no-pager cybergym-server.service ;;
-    preflight|smoke)
+    preflight|smoke|campaign-preflight|campaign)
         for path in "$SERVER_ENV" "$RUNNER_ENV"; do
             [ -r "$path" ] || { printf 'cybergym-ops: missing readable secret file: %s\n' "$path" >&2; exit 1; }
             mode=$(stat -c '%a' "$path")
@@ -45,6 +47,8 @@ case "$COMMAND" in
         case "$COMMAND" in
             preflight) exec "$SCRIPT_DIR/preflight.sh" "$@" ;;
             smoke) exec "$SCRIPT_DIR/smoke.sh" "$@" ;;
+            campaign-preflight) exec "$SCRIPT_DIR/campaign-preflight.sh" "$@" ;;
+            campaign) exec "$SCRIPT_DIR/campaign.sh" "$@" ;;
         esac
         ;;
     *) printf 'cybergym-ops: unknown command: %s\n' "$COMMAND" >&2; exit 2 ;;

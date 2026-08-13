@@ -1,0 +1,243 @@
+from __future__ import annotations
+
+import json
+from dataclasses import replace
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from cybergym_hud.campaign import (
+    CAMPAIGN_JOB_NAME,
+    CampaignBlocked,
+    CampaignState,
+    _campaign_identity,
+    campaign_lock,
+    reconcile_running_attempt,
+    run_campaign,
+    validate_campaign_profile,
+)
+from cybergym_hud.native import NativeOpenHandsConfig
+from cybergym_hud.receipt import NativeReceipt
+
+
+def _config(tmp_path: Path) -> NativeOpenHandsConfig:
+    return NativeOpenHandsConfig(
+        repository_root=Path(__file__).resolve().parents[3],
+        data_dir=tmp_path / "data",
+        server="http://127.0.0.1:8666",
+        model="gpt-5.6-sol",
+        reasoning_effort="xhigh",
+        log_dir=tmp_path / "results/logs",
+        tmp_dir=tmp_path / "results/tmp",
+        max_iter=200,
+        timeout=3600,
+    ).normalized()
+
+
+def test_paid_campaign_profile_is_exact_and_width_is_capped(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    validate_campaign_profile(config, max_concurrent=6, shard_size=24)
+    with pytest.raises(ValueError, match="max_concurrent"):
+        validate_campaign_profile(config, max_concurrent=7, shard_size=12)
+    with pytest.raises(ValueError, match="profile drift"):
+        validate_campaign_profile(
+            replace(config, max_iter=201),
+            max_concurrent=1,
+            shard_size=12,
+        )
+
+
+def test_state_is_deterministic_mode_0600_and_contains_no_credentials(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    ids = ("arvo:1", "arvo:2", "oss-fuzz:3")
+    state = CampaignState(tmp_path / "state")
+    state.state_dir.mkdir(mode=0o700)
+    state.initialize(identity=_campaign_identity(config, ids, 2), task_ids=ids, shard_size=2)
+
+    saved = json.loads(state.path.read_text(encoding="utf-8"))
+    assert [shard["task_ids"] for shard in saved["shards"]] == [["arvo:1", "arvo:2"], ["oss-fuzz:3"]]
+    assert state.path.stat().st_mode & 0o777 == 0o600
+    serialized = json.dumps(saved)
+    assert "API_KEY" not in serialized
+    assert "sk-" not in serialized
+    assert config.base_url not in serialized or not config.base_url
+
+    with pytest.raises(CampaignBlocked, match="identity/profile"):
+        other = CampaignState(tmp_path / "state")
+        other.initialize(identity=_campaign_identity(config, ids, 1), task_ids=ids, shard_size=1)
+
+
+def test_lock_refuses_a_second_campaign_process(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    with campaign_lock(state_dir):
+        with pytest.raises(CampaignBlocked, match="another campaign"):
+            with campaign_lock(state_dir):
+                pass
+
+
+@pytest.mark.asyncio
+async def test_campaign_checkpoints_small_named_jobs_and_restart_skips_paid_tasks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    ids = ("arvo:1", "arvo:2", "arvo:3", "arvo:4", "oss-fuzz:5")
+    monkeypatch.setattr("cybergym_hud.campaign.catalog_task_ids", lambda _root: ids)
+    monkeypatch.setattr("cybergym_hud.campaign.validate_contract", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        "cybergym_hud.campaign.make_taskset",
+        lambda **_kwargs: SimpleNamespace(api_id=None),
+    )
+    jobs: list[SimpleNamespace] = []
+    launched: list[str] = []
+
+    async def job_factory(name: str, *, taskset_id=None):
+        assert name == CAMPAIGN_JOB_NAME
+        assert taskset_id is None
+        job = SimpleNamespace(id=f"job-{len(jobs) + 1}", name=name)
+        jobs.append(job)
+        return job
+
+    def native_executor(rollout_config, binding):
+        launched.append(binding.task_id)
+        return NativeReceipt(
+            status="completed",
+            task_id=binding.task_id,
+            server=binding.server,
+            run_profile=rollout_config.receipt_profile(),
+            agent_id="a" * 32,
+            upstream_returned_agent_id="a" * 32,
+        )
+
+    async def batch_runner(task_ids, rollout_config, *, executor, job_name, job, **_kwargs):
+        assert job_name == CAMPAIGN_JOB_NAME == job.name
+        runs = []
+        for task_id in task_ids:
+            receipt = executor(
+                rollout_config,
+                SimpleNamespace(task_id=task_id, server=rollout_config.server),
+            )
+            runs.append(
+                {
+                    "trace_id": f"trace-{task_id}",
+                    "is_error": False,
+                    "reward": 1.0,
+                    "native_receipt": receipt.model_dump(mode="json"),
+                }
+            )
+        return {
+            "job_id": job.id,
+            "job_name": job.name,
+            "task_count": len(runs),
+            "is_error": False,
+            "runs": runs,
+        }
+
+    async def receipt_verifier(result, *, results_dir):
+        assert results_dir == config.log_dir.parent
+        return {
+            **result,
+            "trace_ids": [run["trace_id"] for run in result["runs"]],
+            "hud_remote_receipt_verified": True,
+            "hud_remote_events_verified": True,
+        }
+
+    state_dir = tmp_path / "state"
+    summary = await run_campaign(
+        config,
+        state_dir=state_dir,
+        max_concurrent=2,
+        shard_size=2,
+        confirm_paid_all=True,
+        job_factory=job_factory,
+        batch_runner=batch_runner,
+        receipt_verifier=receipt_verifier,
+        native_executor=native_executor,
+        artifact_fingerprints={"source_artifact_sha256": "1" * 64, "grader_artifact_sha256": "2" * 64},
+    )
+    assert summary["complete"] is True
+    assert launched == list(ids)
+    assert len(jobs) == 3
+    assert all(job.name == CAMPAIGN_JOB_NAME for job in jobs)
+    assert len(list((state_dir / "shards").glob("*.json"))) == 3
+
+    async def forbidden_job_factory(*_args, **_kwargs):
+        raise AssertionError("restart must not open a new paid job")
+
+    resumed = await run_campaign(
+        config,
+        state_dir=state_dir,
+        max_concurrent=1,
+        shard_size=2,
+        confirm_paid_all=True,
+        job_factory=forbidden_job_factory,
+        batch_runner=batch_runner,
+        receipt_verifier=receipt_verifier,
+        native_executor=native_executor,
+        artifact_fingerprints={"source_artifact_sha256": "1" * 64, "grader_artifact_sha256": "2" * 64},
+    )
+    assert resumed["complete"] is True
+    assert launched == list(ids)
+
+
+@pytest.mark.asyncio
+async def test_restart_recovers_terminal_rows_and_leaves_unlaunched_rows_pending(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    ids = ("arvo:1", "arvo:2")
+    state = CampaignState(tmp_path / "state")
+    state.state_dir.mkdir(mode=0o700)
+    state.initialize(identity=_campaign_identity(config, ids, 2), task_ids=ids, shard_size=2)
+    attempt_number = state.start_attempt(
+        0,
+        job=SimpleNamespace(id="job-1", name=CAMPAIGN_JOB_NAME),
+        task_ids=ids,
+        max_concurrent=1,
+    )
+    state.mark_launched(0, attempt_number, "arvo:1")
+
+    class Client:
+        async def aget(self, path, *, params=None):
+            if path == "/trace/trace-1/events":
+                assert params is None
+                return {"events": [{"type": "span"}]}
+            assert params["offset"] == 0
+            return [
+                {
+                    "id": "trace-1",
+                    "task_slug": "arvo-1",
+                    "status": "completed",
+                    "reward": 0.0,
+                }
+            ]
+
+    await reconcile_running_attempt(state, 0, state.shard(0)["attempts"][0], client=Client())
+    assert state.shard(0)["completed_task_ids"] == ["arvo:1"]
+    assert state.pending_task_ids(0) == ("arvo:2",)
+
+
+@pytest.mark.asyncio
+async def test_restart_blocks_instead_of_repeating_a_launched_task_without_receipt(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    ids = ("arvo:1",)
+    state = CampaignState(tmp_path / "state")
+    state.state_dir.mkdir(mode=0o700)
+    state.initialize(identity=_campaign_identity(config, ids, 1), task_ids=ids, shard_size=1)
+    attempt_number = state.start_attempt(
+        0,
+        job=SimpleNamespace(id="job-1", name=CAMPAIGN_JOB_NAME),
+        task_ids=ids,
+        max_concurrent=1,
+    )
+    state.mark_launched(0, attempt_number, "arvo:1")
+
+    class EmptyClient:
+        async def aget(self, _path, *, params):
+            return []
+
+    with pytest.raises(CampaignBlocked, match="No task was relaunched"):
+        await reconcile_running_attempt(state, 0, state.shard(0)["attempts"][0], client=EmptyClient())
+    assert state.shard(0)["attempts"][0]["status"] == "reconciliation_required"

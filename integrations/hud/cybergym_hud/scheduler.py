@@ -280,6 +280,7 @@ async def run_many(
     executor: Callable[[NativeOpenHandsConfig, NativeTaskBinding], NativeReceipt] | None = None,
     uuid_factory: Callable[[], UUID] = uuid4,
     job_name: str | None = None,
+    job: Job | None = None,
 ) -> dict[str, Any]:
     """Run a rolling batch with one isolated upstream configuration per row."""
 
@@ -320,7 +321,10 @@ async def run_many(
                 cleanup_file_tracking_root=cleanup_roots[raw_task_id],
             )
 
-        job = await _start_named_job(taskset, job_name)
+        if job is None:
+            job = await _start_named_job(taskset, job_name)
+        elif job_name is not None and job.name != _validate_job_name(job_name):
+            raise ValueError("pre-started HUD Job name does not match job_name")
         job = await taskset.run(
             NativeOpenHandsBatchAgent(
                 rollout_configs,

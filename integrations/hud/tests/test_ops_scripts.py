@@ -168,6 +168,37 @@ def test_smoke_refuses_spend_before_preflight_or_uv() -> None:
     assert "preflight" not in result.stdout
 
 
+def test_full_campaign_refuses_spend_before_preflight_or_uv() -> None:
+    result = _run(str(OPS / "campaign.sh"), env={"PATH": os.environ["PATH"]})
+    assert result.returncode != 0
+    assert "--confirm-paid-all" in result.stderr
+    assert "preflight" not in result.stdout
+
+
+def test_campaign_profile_resume_and_secret_boundaries_are_explicit() -> None:
+    campaign = (OPS / "campaign.sh").read_text(encoding="utf-8")
+    preflight = (OPS / "campaign-preflight.sh").read_text(encoding="utf-8")
+    dispatcher = (OPS / "cybergym-ops").read_text(encoding="utf-8")
+    for expected in (
+        "gpt-5.6-sol",
+        "xhigh",
+        "cybergym-gpt5.6-sol",
+        "--confirm-paid-all",
+        "--max-concurrent",
+        "--shard-size",
+        "cybergym-hud-run-campaign",
+    ):
+        assert expected in campaign
+    assert "CG_MODEL_BASE_URL" not in campaign.split("set -- uv", 1)[1]
+    assert "OPENAI_API_KEY" not in campaign
+    assert "HUD_API_KEY" not in campaign
+    assert "CYBERGYM_API_KEY" not in campaign
+    assert "cybergym-hud-preflight-catalog" in preflight
+    assert "full-corpus-preflight.json" in preflight
+    assert "campaign-preflight" in dispatcher
+    assert 'exec "$SCRIPT_DIR/campaign.sh"' in dispatcher
+
+
 def test_smoke_is_exactly_one_task_and_one_slot() -> None:
     text = (OPS / "smoke.sh").read_text(encoding="utf-8")
     assert "--all" not in text
