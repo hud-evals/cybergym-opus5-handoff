@@ -109,9 +109,13 @@ Pinned OpenHands reports ordinary headless max-iteration exhaustion through
 its generic controller `error` state, while original CyberGym accepts the saved
 trajectory and still grades submitted PoCs. The adapter therefore treats only
 the exact terminal sentinel whose current and maximum iteration both equal the
-receipted `max_iter` as a completed, gradeable run. Provider errors, monetary
-budget sentinels (this profile configures no monetary budget), mismatched
-limits, and mixed controller errors remain infrastructure errors.
+receipted `max_iter` as a completed, gradeable run. The append-only OpenHands
+event store is the sole terminal-state authority: structured `finished`,
+`rejected`, and that exact max-iteration sentinel are gradeable. Raw logs never
+authorize completion because they also contain agent-controlled command output.
+Missing or malformed terminal events, provider errors, monetary budget
+sentinels (this profile configures no monetary budget), mismatched limits, and
+mixed controller terminal states remain infrastructure errors.
 
 The machine-readable version of this boundary is packaged at
 `cybergym_hud/fidelity-contract.json`.

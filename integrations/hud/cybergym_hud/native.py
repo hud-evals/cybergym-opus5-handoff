@@ -26,11 +26,6 @@ _MAX_ITERATION_REASON = re.compile(
     r"^RuntimeError: Agent reached maximum iteration in headless mode\. "
     r"Current iteration: (?P<current>[0-9]+), max iteration: (?P<maximum>[0-9]+)$"
 )
-_OUTER_CONTROLLER_ERROR_LOG = re.compile(
-    r"^[0-9]{2}:[0-9]{2}:[0-9]{2} - openhands:(?:DEBUG|INFO): "
-    r"agent_controller\.py:428 - \[Agent Controller [0-9a-f-]+\] "
-    r"AgentStateChangedObservation\(content='', agent_state='error', reason="
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,48 +146,20 @@ def _classify_error_reasons(reasons: list[str], *, max_iter: int) -> Literal["no
     return "max_iterations"
 
 
-def _log_controller_termination(
-    logs_dir: Path,
-    *,
-    max_iter: int,
-) -> Literal["none", "max_iterations", "error"]:
-    if not logs_dir.is_dir():
-        return "none"
-    expected_reason = (
-        "RuntimeError: Agent reached maximum iteration in headless mode. "
-        f"Current iteration: {max_iter}, max iteration: {max_iter}"
-    )
-    expected_tail = f"{expected_reason!r}, observation=<ObservationType.AGENT_STATE_CHANGED: 'agent_state_changed'>)"
-    error_lines: list[bool] = []
-    try:
-        log_paths = sorted(logs_dir.glob("openhands_*.log"))
-        for log_path in log_paths:
-            if not stat.S_ISREG(log_path.stat(follow_symlinks=False).st_mode):
-                return "error"
-            with log_path.open(encoding="utf-8", errors="replace") as handle:
-                for line in handle:
-                    match = _OUTER_CONTROLLER_ERROR_LOG.match(line)
-                    if match:
-                        error_lines.append(line[match.end() :].rstrip("\r\n") == expected_tail)
-    except OSError:
-        return "error"
-    if not error_lines:
-        return "none"
-    return "max_iterations" if all(error_lines) else "error"
-
-
 def _controller_termination(
     receipt_log_dir: Path,
     *,
     max_iter: int,
-) -> Literal["none", "max_iterations", "error"]:
+) -> Literal["finished", "rejected", "max_iterations", "error"]:
     """Classify pinned OpenHands' zero-exit controller terminal state.
 
     OpenHands 0.33 represents normal headless iteration exhaustion as
     ``AgentState.ERROR``.  Original CyberGym nevertheless accepts any saved
     trajectory and grades it.  Preserve that behavior only for the exact,
-    configured max-iteration sentinel; every other controller error remains
-    a non-reportable infrastructure failure.
+    configured max-iteration sentinel; every other controller terminal state
+    remains a non-reportable infrastructure failure. The append-only event
+    store is the only authority: raw logs include agent-controlled command
+    output and therefore cannot authorize completion.
     """
 
     events_root = receipt_log_dir / "file" / "sessions"
@@ -200,42 +167,66 @@ def _controller_termination(
         event_paths = sorted(events_root.glob("*/events/*.json")) if events_root.is_dir() else []
     except OSError:
         return "error"
-    if event_paths:
-        reasons: list[str] = []
-        try:
-            for event_path in event_paths:
-                if not stat.S_ISREG(event_path.stat(follow_symlinks=False).st_mode):
-                    return "error"
-                event = json.loads(event_path.read_text(encoding="utf-8"))
-                if not isinstance(event, dict):
-                    return "error"
-                if event.get("observation") != "agent_state_changed":
-                    continue
-                extras = event.get("extras")
-                if event.get("source") != "environment" or not isinstance(extras, dict):
-                    return "error"
-                agent_state = extras.get("agent_state")
-                if not isinstance(agent_state, str):
-                    return "error"
-                if agent_state != "error":
-                    continue
-                reason = extras.get("reason")
-                if not isinstance(reason, str):
-                    return "error"
-                reasons.append(reason)
-        except (OSError, ValueError, TypeError):
-            return "error"
-        # The append-only OpenHands event store is authoritative once it
-        # exists. Raw logs also contain agent-controlled command output, so
-        # cross-checking them could let output that merely resembles a state
-        # observation turn an otherwise valid rollout into infrastructure
-        # failure.
-        return _classify_error_reasons(reasons, max_iter=max_iter)
+    if not event_paths:
+        return "error"
 
-    # Early controller failures may not persist the canonical event store.
-    # The fallback accepts only the pinned formatter's outer controller record;
-    # unanchored state-like text inside CmdOutputObservation is untrusted.
-    return _log_controller_termination(receipt_log_dir / "logs", max_iter=max_iter)
+    terminal_states: list[tuple[str, str]] = []
+    try:
+        for event_path in event_paths:
+            if not stat.S_ISREG(event_path.stat(follow_symlinks=False).st_mode):
+                return "error"
+            event = json.loads(event_path.read_text(encoding="utf-8"))
+            if not isinstance(event, dict):
+                return "error"
+            if event.get("observation") != "agent_state_changed":
+                continue
+            extras = event.get("extras")
+            if event.get("source") != "environment" or not isinstance(extras, dict):
+                return "error"
+            agent_state = extras.get("agent_state")
+            reason = extras.get("reason")
+            if not isinstance(agent_state, str) or not isinstance(reason, str):
+                return "error"
+            if agent_state in {"finished", "rejected", "error", "paused", "stopped"}:
+                terminal_states.append((agent_state, reason))
+            elif (
+                agent_state
+                not in {
+                    "loading",
+                    "running",
+                    "awaiting_user_input",
+                    "awaiting_user_confirmation",
+                    "user_confirmed",
+                    "user_rejected",
+                    "rate_limited",
+                }
+                or reason
+            ):
+                # Pinned OpenHands attaches a reason only to ERROR. Reject a
+                # malformed, unknown, or otherwise noncanonical state rather
+                # than silently ignoring controller drift or diagnostics.
+                return "error"
+    except (OSError, ValueError, TypeError):
+        return "error"
+
+    if not terminal_states:
+        return "error"
+
+    error_reasons = [reason for state, reason in terminal_states if state == "error"]
+    if error_reasons:
+        # An ERROR is terminal in this headless runner. Any mixture with a
+        # different terminal state is malformed, and any non-budget reason is
+        # provider/transport/controller infrastructure failure.
+        if len(error_reasons) != len(terminal_states):
+            return "error"
+        return _classify_error_reasons(error_reasons, max_iter=max_iter)
+
+    if len(terminal_states) != 1:
+        return "error"
+    terminal_state, reason = terminal_states[0]
+    if terminal_state in {"finished", "rejected"} and not reason:
+        return terminal_state
+    return "error"
 
 
 class _OpenHandsSubprocessProxy:
@@ -382,7 +373,10 @@ def execute_upstream_openhands(
             agent_id=agent_id,
             upstream_returned_agent_id=returned,
             log_dir=str(receipt_log_dir),
-            error="pinned OpenHands controller entered its error state; inspect the private rollout log",
+            error=(
+                "pinned OpenHands controller did not produce a canonical gradeable structured terminal state; "
+                "inspect the private rollout log"
+            ),
         )
     return NativeReceipt(
         status="completed",

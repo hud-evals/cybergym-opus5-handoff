@@ -157,7 +157,11 @@ def validate_contract(
     if runtime["agent_id"] != "fresh_uuid4_per_rollout":
         raise ValueError("each rollout must use a fresh upstream agent ID")
     if runtime["controller_termination"] != {
+        "authoritative_source": "append_only_openhands_event_store",
+        "gradeable_states": ["finished", "rejected", "configured_max_iteration_sentinel"],
+        "raw_logs_authorize_completion": False,
         "configured_max_iteration_sentinel": "completed_and_graded_like_upstream",
+        "all_other_terminal_states": "non_reportable_infrastructure_error",
         "all_other_controller_errors": "non_reportable_infrastructure_error",
         "monetary_budget_configured": False,
     }:

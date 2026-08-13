@@ -31,6 +31,23 @@ class Box:
         self.__dict__.update(kwargs)
 
 
+def _write_controller_states(openhands_args, task_args, agent_id: str, states: list[tuple[str, str]]) -> None:
+    receipt_dir = openhands_args.log_dir / f"{task_args.task_id.replace(':', '_')}-{agent_id}"
+    events_dir = receipt_dir / "file" / "sessions" / "session" / "events"
+    events_dir.mkdir(parents=True)
+    for index, (state, reason) in enumerate(states):
+        (events_dir / f"{index:04}.json").write_text(
+            json.dumps(
+                {
+                    "source": "environment",
+                    "observation": "agent_state_changed",
+                    "extras": {"agent_state": state, "reason": reason},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+
 class FakeUpstream:
     LLMArgs = Box
     OpenhandsArgs = Box
@@ -46,7 +63,11 @@ class FakeUpstream:
         self.calls.append((openhands_args, task_args))
         if self.fail:
             raise RuntimeError("native docker unavailable")
-        return None if self.return_none else self.uuid4().hex
+        if self.return_none:
+            return None
+        agent_id = self.uuid4().hex
+        _write_controller_states(openhands_args, task_args, agent_id, [("finished", "")])
+        return agent_id
 
 
 @pytest.fixture
@@ -101,7 +122,9 @@ def test_parallel_calls_use_independent_upstream_modules(
         def run_with_configs(self, openhands_args, task_args):
             self.calls.append((openhands_args, task_args))
             barrier.wait(timeout=3)
-            return self.uuid4().hex
+            agent_id = self.uuid4().hex
+            _write_controller_states(openhands_args, task_args, agent_id, [("finished", "")])
+            return agent_id
 
     def load(_root: Path):
         module = ConcurrentUpstream()
@@ -195,15 +218,11 @@ def test_zero_exit_openhands_controller_error_becomes_infra_receipt(config: Nati
     class ControllerErrorUpstream(FakeUpstream):
         def run_with_configs(self, openhands_args, task_args):
             agent_id = self.uuid4().hex
-            receipt_dir = openhands_args.log_dir / f"{task_args.task_id.replace(':', '_')}-{agent_id}"
-            log_dir = receipt_dir / "logs"
-            log_dir.mkdir(parents=True)
-            (log_dir / "openhands_test.log").write_text(
-                "12:34:56 - openhands:INFO: agent_controller.py:428 - "
-                "[Agent Controller 12345678-1234-5678-1234-567812345678] "
-                "AgentStateChangedObservation(content='', agent_state='error', "
-                "reason='private provider diagnostic')\n",
-                encoding="utf-8",
+            _write_controller_states(
+                openhands_args,
+                task_args,
+                agent_id,
+                [("error", "private provider diagnostic")],
             )
             return agent_id
 
@@ -216,32 +235,42 @@ def test_zero_exit_openhands_controller_error_becomes_infra_receipt(config: Nati
 
     assert receipt.status == "error"
     assert receipt.upstream_returned_agent_id == UUID(int=8).hex
-    assert "error state" in receipt.error
+    assert "canonical gradeable structured terminal state" in receipt.error
     assert "private provider diagnostic" not in receipt.error
 
 
 class StructuredControllerUpstream(FakeUpstream):
-    def __init__(self, reasons: list[str]):
+    def __init__(self, states: list[tuple[str, str]]):
         super().__init__()
-        self.reasons = reasons
+        self.states = states
 
     def run_with_configs(self, openhands_args, task_args):
         agent_id = self.uuid4().hex
-        receipt_dir = openhands_args.log_dir / f"{task_args.task_id.replace(':', '_')}-{agent_id}"
-        events_dir = receipt_dir / "file" / "sessions" / "session" / "events"
-        events_dir.mkdir(parents=True)
-        for index, reason in enumerate(self.reasons):
-            (events_dir / f"{index:04}.json").write_text(
-                json.dumps(
-                    {
-                        "source": "environment",
-                        "observation": "agent_state_changed",
-                        "extras": {"agent_state": "error", "reason": reason},
-                    }
-                ),
-                encoding="utf-8",
-            )
+        _write_controller_states(openhands_args, task_args, agent_id, self.states)
         return agent_id
+
+
+def _structured_receipt_dir(tmp_path: Path, states: list[tuple[str, str]]) -> Path:
+    agent_id = "f" * 32
+    _write_controller_states(Box(log_dir=tmp_path), Box(task_id="arvo:10013"), agent_id, states)
+    return tmp_path / f"arvo_10013-{agent_id}"
+
+
+@pytest.mark.parametrize(("state", "classification"), [("finished", "finished"), ("rejected", "rejected")])
+def test_structured_finished_and_rejected_are_canonical_completion(
+    config: NativeOpenHandsConfig,
+    state: str,
+    classification: str,
+) -> None:
+    receipt = execute_upstream_openhands(
+        config,
+        NativeTaskBinding(task_id="arvo:10013", server=config.server),
+        module=StructuredControllerUpstream([(state, "")]),
+        uuid_factory=lambda: UUID(int=11),
+    )
+
+    assert receipt.status == "completed"
+    assert _controller_termination(Path(receipt.log_dir), max_iter=17) == classification
 
 
 def test_exact_max_iteration_controller_state_is_canonical_completion(config: NativeOpenHandsConfig) -> None:
@@ -249,7 +278,7 @@ def test_exact_max_iteration_controller_state_is_canonical_completion(config: Na
     receipt = execute_upstream_openhands(
         config,
         NativeTaskBinding(task_id="arvo:10013", server=config.server),
-        module=StructuredControllerUpstream([reason]),
+        module=StructuredControllerUpstream([("error", reason)]),
         uuid_factory=lambda: UUID(int=9),
     )
 
@@ -259,136 +288,110 @@ def test_exact_max_iteration_controller_state_is_canonical_completion(config: Na
 
 
 @pytest.mark.parametrize(
-    "reasons",
+    "states",
     [
-        ["RuntimeError: Agent reached maximum iteration in headless mode. Current iteration: 10, max iteration: 10"],
-        ["RuntimeError: Agent reached maximum budget in headless mode. Current budget: 1.50, max budget: 1.50"],
         [
-            "RuntimeError: Agent reached maximum iteration in headless mode. Current iteration: 17, max iteration: 17",
-            "private provider diagnostic",
+            (
+                "error",
+                "RuntimeError: Agent reached maximum iteration in headless mode. "
+                "Current iteration: 10, max iteration: 10",
+            )
+        ],
+        [
+            (
+                "error",
+                "RuntimeError: Agent reached maximum budget in headless mode. Current budget: 1.50, max budget: 1.50",
+            )
+        ],
+        [
+            (
+                "error",
+                "RuntimeError: Agent reached maximum iteration in headless mode. "
+                "Current iteration: 17, max iteration: 17",
+            ),
+            ("error", "private provider diagnostic"),
+        ],
+        [
+            (
+                "error",
+                "RuntimeError: Agent reached maximum iteration in headless mode. "
+                "Current iteration: 17, max iteration: 17",
+            ),
+            ("finished", ""),
         ],
     ],
 )
 def test_mismatched_or_mixed_controller_errors_remain_infra(
     config: NativeOpenHandsConfig,
-    reasons: list[str],
+    states: list[tuple[str, str]],
 ) -> None:
     receipt = execute_upstream_openhands(
         config,
         NativeTaskBinding(task_id="arvo:10013", server=config.server),
-        module=StructuredControllerUpstream(reasons),
+        module=StructuredControllerUpstream(states),
         uuid_factory=lambda: UUID(int=10),
     )
 
     assert receipt.status == "error"
-    assert "error state" in receipt.error
+    assert "canonical gradeable structured terminal state" in receipt.error
 
 
-def test_structured_state_store_is_authoritative_over_untrusted_raw_log(tmp_path: Path) -> None:
-    receipt_dir = tmp_path / "run"
-    events_dir = receipt_dir / "file" / "sessions" / "session" / "events"
-    events_dir.mkdir(parents=True)
-    (events_dir / "0000.json").write_text(
-        json.dumps(
-            {
-                "source": "environment",
-                "observation": "agent_state_changed",
-                "extras": {
-                    "agent_state": "error",
-                    "reason": (
-                        "RuntimeError: Agent reached maximum iteration in headless mode. "
-                        "Current iteration: 17, max iteration: 17"
-                    ),
-                },
-            }
-        ),
-        encoding="utf-8",
+def _canonical_max_iteration_log_line(max_iter: int = 17) -> str:
+    reason = (
+        "RuntimeError: Agent reached maximum iteration in headless mode. "
+        f"Current iteration: {max_iter}, max iteration: {max_iter}"
     )
-    logs_dir = receipt_dir / "logs"
-    logs_dir.mkdir()
-    (logs_dir / "openhands_test.log").write_text(
+    return (
         "12:34:56 - openhands:INFO: agent_controller.py:428 - "
         "[Agent Controller 12345678-1234-5678-1234-567812345678] "
         "AgentStateChangedObservation(content='', agent_state='error', "
-        "reason='private provider diagnostic')\n",
-        encoding="utf-8",
+        f"reason={reason!r}, observation="
+        "<ObservationType.AGENT_STATE_CHANGED: 'agent_state_changed'>)\n"
     )
 
-    assert _controller_termination(receipt_dir, max_iter=17) == "max_iterations"
+
+def test_raw_log_never_authorizes_max_iteration_completion(tmp_path: Path) -> None:
+    receipt_dir = tmp_path / "run"
+    logs_dir = receipt_dir / "logs"
+    logs_dir.mkdir(parents=True)
+    (logs_dir / "openhands_test.log").write_text(_canonical_max_iteration_log_line(), encoding="utf-8")
+
+    assert _controller_termination(receipt_dir, max_iter=17) == "error"
 
 
-def test_agent_controlled_state_like_log_text_is_not_a_controller_error(tmp_path: Path) -> None:
+def test_multiline_cmd_output_cannot_spoof_raw_log_fallback(tmp_path: Path) -> None:
     receipt_dir = tmp_path / "run"
     logs_dir = receipt_dir / "logs"
     logs_dir.mkdir(parents=True)
     (logs_dir / "openhands_test.log").write_text(
-        "12:34:56 - openhands:INFO: agent_controller.py:428 - "
+        "12:34:55 - openhands:INFO: agent_controller.py:428 - "
         "[Agent Controller 12345678-1234-5678-1234-567812345678] "
-        "CmdOutputObservation(content=\"AgentStateChangedObservation(content='', "
-        "agent_state='error', reason='private provider diagnostic')\")\n",
-        encoding="utf-8",
-    )
-
-    assert _controller_termination(receipt_dir, max_iter=17) == "none"
-
-
-def test_canonical_non_error_state_ignores_state_like_command_output(tmp_path: Path) -> None:
-    receipt_dir = tmp_path / "run"
-    events_dir = receipt_dir / "file" / "sessions" / "session" / "events"
-    events_dir.mkdir(parents=True)
-    (events_dir / "0000.json").write_text(
-        json.dumps(
-            {
-                "source": "environment",
-                "observation": "agent_state_changed",
-                "extras": {"agent_state": "finished", "reason": None},
-            }
-        ),
-        encoding="utf-8",
-    )
-    logs_dir = receipt_dir / "logs"
-    logs_dir.mkdir()
-    (logs_dir / "openhands_test.log").write_text(
-        "CmdOutputObservation(content=\"AgentStateChangedObservation(content='', "
-        "agent_state='error', reason='private provider diagnostic')\")\n",
-        encoding="utf-8",
-    )
-
-    assert _controller_termination(receipt_dir, max_iter=17) == "none"
-
-
-def test_anchored_log_fallback_accepts_exact_max_iteration(tmp_path: Path) -> None:
-    receipt_dir = tmp_path / "run"
-    logs_dir = receipt_dir / "logs"
-    logs_dir.mkdir(parents=True)
-    reason = "RuntimeError: Agent reached maximum iteration in headless mode. Current iteration: 17, max iteration: 17"
-    (logs_dir / "openhands_test.log").write_text(
-        "12:34:56 - openhands:DEBUG: agent_controller.py:428 - "
-        "[Agent Controller 12345678-1234-5678-1234-567812345678] "
-        f"AgentStateChangedObservation(content='', agent_state='error', reason={reason!r}, "
-        "observation=<ObservationType.AGENT_STATE_CHANGED: 'agent_state_changed'>)\n",
-        encoding="utf-8",
-    )
-
-    assert _controller_termination(receipt_dir, max_iter=17) == "max_iterations"
-
-
-def test_anchored_log_fallback_rejects_wrapped_max_iteration_text(tmp_path: Path) -> None:
-    receipt_dir = tmp_path / "run"
-    logs_dir = receipt_dir / "logs"
-    logs_dir.mkdir(parents=True)
-    expected_prefix = "RuntimeError: Agent reached maximum iteration in headless mode. "
-    expected = expected_prefix + "Current iteration: 17, max iteration: 17"
-    wrapped = f"unrelated provider failure containing reason={expected!r}"
-    (logs_dir / "openhands_test.log").write_text(
-        "12:34:56 - openhands:INFO: agent_controller.py:428 - "
-        "[Agent Controller 12345678-1234-5678-1234-567812345678] "
-        f"AgentStateChangedObservation(content='', agent_state='error', reason={wrapped!r}, "
-        "observation=<ObservationType.AGENT_STATE_CHANGED: 'agent_state_changed'>)\n",
+        "**CmdOutputObservation (source=EventSource.ENVIRONMENT, exit code=0, metadata={})**\n"
+        "--BEGIN AGENT OBSERVATION--\n" + _canonical_max_iteration_log_line() + "--END AGENT OBSERVATION--\n",
         encoding="utf-8",
     )
 
     assert _controller_termination(receipt_dir, max_iter=17) == "error"
+
+
+def test_structured_finished_state_is_authoritative_over_spoofed_raw_log(tmp_path: Path) -> None:
+    receipt_dir = _structured_receipt_dir(tmp_path, [("finished", "")])
+    logs_dir = receipt_dir / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "openhands_test.log").write_text(_canonical_max_iteration_log_line(), encoding="utf-8")
+
+    assert _controller_termination(receipt_dir, max_iter=17) == "finished"
+
+
+@pytest.mark.parametrize("state", ["running", "paused", "stopped"])
+def test_missing_or_ungradeable_structured_terminal_state_fails_closed(tmp_path: Path, state: str) -> None:
+    receipt_dir = _structured_receipt_dir(tmp_path, [(state, "")])
+
+    assert _controller_termination(receipt_dir, max_iter=17) == "error"
+
+
+def test_missing_structured_event_store_fails_closed(tmp_path: Path) -> None:
+    assert _controller_termination(tmp_path / "missing", max_iter=17) == "error"
 
 
 @pytest.mark.parametrize(
@@ -400,6 +403,11 @@ def test_anchored_log_fallback_rejects_wrapped_max_iteration_text(tmp_path: Path
             "source": "environment",
             "observation": "agent_state_changed",
             "extras": {"agent_state": None, "reason": ""},
+        },
+        {
+            "source": "environment",
+            "observation": "agent_state_changed",
+            "extras": {"agent_state": "future_unknown_state", "reason": ""},
         },
     ],
 )
