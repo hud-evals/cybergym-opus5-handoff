@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove the pinned OpenHands request shape against localhost without spend."""
+"""Prove pinned OpenHands' two-turn Responses bridge against localhost."""
 
 from __future__ import annotations
 
@@ -17,31 +17,87 @@ MODEL = "gpt-5.6-sol"
 EFFORT = "xhigh"
 
 
+def _response(response_id: str, output: list[dict[str, Any]]) -> bytes:
+    return json.dumps(
+        {
+            "id": response_id,
+            "object": "response",
+            "created_at": 0,
+            "status": "completed",
+            "error": None,
+            "incomplete_details": None,
+            "instructions": None,
+            "max_output_tokens": 32,
+            "model": MODEL,
+            "output": output,
+            "parallel_tool_calls": True,
+            "previous_response_id": None,
+            "reasoning": {"effort": EFFORT, "summary": None},
+            "store": True,
+            "temperature": None,
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": None,
+            "truncation": "disabled",
+            "usage": {
+                "input_tokens": 2,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens": 2,
+                "output_tokens_details": {"reasoning_tokens": 1},
+                "total_tokens": 4,
+            },
+            "user": None,
+        }
+    ).encode()
+
+
 class CaptureHandler(BaseHTTPRequestHandler):
-    request_json: dict[str, Any] | None = None
+    requests: list[dict[str, Any]] = []
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib callback name
-        if self.path != "/v1/chat/completions":
+        if self.path != "/v1/responses":
             self.send_error(404)
             return
         length = int(self.headers.get("Content-Length", "0"))
-        type(self).request_json = json.loads(self.rfile.read(length))
-        body = json.dumps(
-            {
-                "id": "chatcmpl-local-proof",
-                "object": "chat.completion",
-                "created": 0,
-                "model": MODEL,
-                "choices": [
+        request = json.loads(self.rfile.read(length))
+        type(self).requests.append(request)
+        if len(type(self).requests) == 1:
+            body = _response(
+                "resp_local_1",
+                [
+                    {"id": "rs_local_1", "type": "reasoning", "summary": [], "status": "completed"},
                     {
-                        "index": 0,
-                        "message": {"role": "assistant", "content": "local proof"},
-                        "finish_reason": "stop",
+                        "id": "fc_local_1",
+                        "type": "function_call",
+                        "call_id": "call_local_1",
+                        "name": "execute_bash",
+                        "arguments": '{"command":"pwd"}',
+                        "status": "completed",
+                    },
+                ],
+            )
+        elif len(type(self).requests) == 2:
+            body = _response(
+                "resp_local_2",
+                [
+                    {
+                        "id": "msg_local_2",
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "local proof complete",
+                                "annotations": [],
+                            }
+                        ],
                     }
                 ],
-                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-            }
-        ).encode()
+            )
+        else:
+            self.send_error(409)
+            return
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -53,6 +109,7 @@ class CaptureHandler(BaseHTTPRequestHandler):
 
 
 CHILD = r"""
+from openhands.agenthub.codeact_agent.function_calling import get_tools
 from openhands.core.config import LLMConfig
 from openhands.llm.llm import LLM
 
@@ -65,8 +122,33 @@ config = LLMConfig(
 )
 llm = LLM(config)
 assert llm.is_function_calling_active()
-response = llm.completion(messages=[{"role": "user", "content": "local proof"}])
-assert response.choices[0].message.content == "local proof"
+# The default OpenHands condenser constructs another LLM from this same
+# config.  Prove startup attached separate state instead of a process singleton.
+condenser_llm = LLM(config)
+assert (
+    llm._cybergym_gpt56_responses_bridge
+    is not condenser_llm._cybergym_gpt56_responses_bridge
+)
+tools = get_tools(llm=llm)
+messages = [
+    {"role": "system", "content": "CodeAct local transport proof"},
+    {"role": "user", "content": "Inspect the workspace"},
+]
+first = llm.completion(messages=messages, tools=tools)
+call = first.choices[0].message.tool_calls[0]
+assert call.id == "call_local_1"
+assert call.function.name == "execute_bash"
+messages.append(first.choices[0].message.model_dump())
+messages.append(
+    {
+        "role": "tool",
+        "tool_call_id": call.id,
+        "name": call.function.name,
+        "content": "/workspace\n",
+    }
+)
+second = llm.completion(messages=messages, tools=tools)
+assert second.choices[0].message.content == "local proof complete"
 """
 
 
@@ -97,7 +179,7 @@ def prove(repository_root: Path) -> dict[str, Any]:
     if not project_python.is_file():
         raise RuntimeError(f"pinned OpenHands Poetry interpreter is missing: {project_python}")
 
-    CaptureHandler.request_json = None
+    CaptureHandler.requests = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), CaptureHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -121,28 +203,38 @@ def prove(repository_root: Path) -> dict[str, Any]:
             )
         except subprocess.CalledProcessError as exc:
             diagnostic = (exc.stderr or exc.stdout or "no child diagnostic")[-4000:]
-            raise RuntimeError(f"pinned OpenHands local request proof failed: {diagnostic}") from exc
+            raise RuntimeError(f"pinned OpenHands local Responses proof failed: {diagnostic}") from exc
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
 
-    request = CaptureHandler.request_json
-    if not isinstance(request, dict):
-        raise RuntimeError("pinned OpenHands made no captured Chat Completions request")
-    expected = {"model": MODEL, "reasoning_effort": EFFORT}
-    for key, value in expected.items():
-        if request.get(key) != value:
-            raise RuntimeError(f"captured {key} was {request.get(key)!r}, expected {value!r}")
-    forbidden = sorted({"temperature", "top_p", "stop"} & request.keys())
+    requests = CaptureHandler.requests
+    if len(requests) != 2:
+        raise RuntimeError(f"pinned OpenHands made {len(requests)} Responses requests, expected two")
+    first, second = requests
+    if first.get("model") != MODEL or first.get("reasoning") != {"effort": EFFORT}:
+        raise RuntimeError("first Responses request omitted the exact model or xhigh reasoning effort")
+    forbidden = sorted({"temperature", "top_p", "stop", "reasoning_effort"} & first.keys())
     if forbidden:
         raise RuntimeError(f"captured request contains unsupported sampling controls: {forbidden}")
+    tools = first.get("tools")
+    if not isinstance(tools, list) or not tools or any("function" in tool for tool in tools):
+        raise RuntimeError("OpenHands function schemas were not flattened for Responses")
+    if second.get("previous_response_id") != "resp_local_1":
+        raise RuntimeError("second request did not continue the first stored Response")
+    if second.get("input") != [{"type": "function_call_output", "call_id": "call_local_1", "output": "/workspace\n"}]:
+        raise RuntimeError("second request did not preserve the OpenHands function result call ID")
     return {
         "ok": True,
-        "endpoint": "localhost-only-chat-completions",
-        "model": request["model"],
-        "reasoning_effort": request["reasoning_effort"],
-        "forbidden_parameters_absent": ["temperature", "top_p", "stop"],
+        "endpoint": "localhost-only-openai-responses",
+        "model": first["model"],
+        "reasoning_effort": first["reasoning"]["effort"],
+        "turns_proved": 2,
+        "function_call_id_preserved": True,
+        "stored_continuation": True,
+        "per_llm_state_isolation": True,
+        "forbidden_parameters_absent": ["temperature", "top_p", "stop", "reasoning_effort"],
     }
 
 

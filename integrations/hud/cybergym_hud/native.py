@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import stat
 from collections.abc import Callable, Mapping
 from concurrent.futures import Executor
 from dataclasses import dataclass
@@ -90,7 +91,11 @@ class NativeOpenHandsConfig:
             budget_profile=budget_profile,
             model=self.model,
             reasoning_effort=self.reasoning_effort,
-            reasoning_transport=("gpt56_chat_completions_extra_body" if self.reasoning_effort else "none"),
+            reasoning_transport=("gpt56_openai_responses_bridge" if self.reasoning_effort else "none"),
+            response_storage=("openai_store_true" if self.reasoning_effort else "none"),
+            response_continuation=(
+                "per_llm_previous_response_id_exact_transcript_extensions" if self.reasoning_effort else "none"
+            ),
             omitted_sampling_parameters=("temperature", "top_p", "stop") if self.reasoning_effort else (),
             max_iter=self.max_iter,
             timeout_seconds=self.timeout,
@@ -118,6 +123,25 @@ def load_upstream_openhands(root: Path) -> ModuleType:
     return module
 
 
+def _controller_entered_error(receipt_log_dir: Path) -> bool:
+    """Detect OpenHands' zero-exit controller failure without exposing its reason."""
+
+    logs_dir = receipt_log_dir / "logs"
+    if not logs_dir.is_dir():
+        return False
+    for log_path in sorted(logs_dir.glob("openhands_*.log")):
+        try:
+            if not stat.S_ISREG(log_path.stat(follow_symlinks=False).st_mode):
+                continue
+            with log_path.open(encoding="utf-8", errors="replace") as handle:
+                for line in handle:
+                    if "AgentStateChangedObservation(" in line and "agent_state='error'" in line:
+                        return True
+        except OSError:
+            continue
+    return False
+
+
 class _OpenHandsSubprocessProxy:
     """Inject compatibility only into the exact pinned OpenHands child."""
 
@@ -130,7 +154,7 @@ class _OpenHandsSubprocessProxy:
         return getattr(self._delegate, name)
 
     def run(self, command: Any, *args: Any, **kwargs: Any) -> Any:
-        normalized = tuple(str(part) for part in command) if isinstance(command, (list, tuple)) else ()
+        normalized = tuple(str(part) for part in command) if isinstance(command, list | tuple) else ()
         marker = ("run", "python", "-m", "openhands.core.main")
         if len(normalized) < 5 or tuple(normalized[1:5]) != marker:
             raise RuntimeError(f"refusing to inject reasoning shim into unexpected command: {normalized!r}")
@@ -251,6 +275,17 @@ def execute_upstream_openhands(
             upstream_returned_agent_id=returned,
             log_dir=str(receipt_log_dir),
             error="upstream run_with_configs did not produce a valid trajectory receipt",
+        )
+    if _controller_entered_error(receipt_log_dir):
+        return NativeReceipt(
+            status="error",
+            task_id=binding.task_id,
+            server=binding.server,
+            run_profile=run_profile,
+            agent_id=agent_id,
+            upstream_returned_agent_id=returned,
+            log_dir=str(receipt_log_dir),
+            error="pinned OpenHands controller entered its error state; inspect the private rollout log",
         )
     return NativeReceipt(
         status="completed",

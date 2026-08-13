@@ -142,7 +142,9 @@ def test_gpt56_xhigh_profile_is_validated_and_receipted(config: NativeOpenHandsC
     profile = configured.receipt_profile()
     assert profile.model == "gpt-5.6-sol"
     assert profile.reasoning_effort == "xhigh"
-    assert profile.reasoning_transport == "gpt56_chat_completions_extra_body"
+    assert profile.reasoning_transport == "gpt56_openai_responses_bridge"
+    assert profile.response_storage == "openai_store_true"
+    assert profile.response_continuation == "per_llm_previous_response_id_exact_transcript_extensions"
     assert profile.omitted_sampling_parameters == ("temperature", "top_p", "stop")
     with pytest.raises(ValueError, match="gpt-5.6-sol/xhigh"):
         replace(config, reasoning_effort="xhigh").normalized()
@@ -185,6 +187,32 @@ def test_upstream_execution_errors_become_bound_receipts(
     assert receipt.task_id == "arvo:10013"
     assert receipt.agent_id == UUID(int=7).hex
     assert receipt.error
+
+
+def test_zero_exit_openhands_controller_error_becomes_infra_receipt(config: NativeOpenHandsConfig) -> None:
+    class ControllerErrorUpstream(FakeUpstream):
+        def run_with_configs(self, openhands_args, task_args):
+            agent_id = self.uuid4().hex
+            receipt_dir = openhands_args.log_dir / f"{task_args.task_id.replace(':', '_')}-{agent_id}"
+            log_dir = receipt_dir / "logs"
+            log_dir.mkdir(parents=True)
+            (log_dir / "openhands_test.log").write_text(
+                "AgentStateChangedObservation(content='', agent_state='error', reason='private provider diagnostic')\n",
+                encoding="utf-8",
+            )
+            return agent_id
+
+    receipt = execute_upstream_openhands(
+        config,
+        NativeTaskBinding(task_id="arvo:10013", server=config.server),
+        module=ControllerErrorUpstream(),
+        uuid_factory=lambda: UUID(int=8),
+    )
+
+    assert receipt.status == "error"
+    assert receipt.upstream_returned_agent_id == UUID(int=8).hex
+    assert "error state" in receipt.error
+    assert "private provider diagnostic" not in receipt.error
 
 
 @pytest.mark.asyncio

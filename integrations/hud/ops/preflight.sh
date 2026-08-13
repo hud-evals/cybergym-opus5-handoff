@@ -149,8 +149,8 @@ if [ "$MODEL" = gpt-5.6-sol ]; then
     uv run --project "$REPOSITORY_ROOT/integrations/hud" python \
         "$SCRIPT_DIR/verify-reasoning-transport.py" \
         --repository-root "$REPOSITORY_ROOT" >/dev/null \
-        || die "pinned OpenHands did not produce a local gpt-5.6-sol/xhigh request"
-    ok 'pinned OpenHands gpt-5.6-sol/xhigh transport proof (localhost only)'
+        || die "pinned OpenHands did not complete the local two-turn gpt-5.6-sol/xhigh Responses proof"
+    ok 'pinned OpenHands gpt-5.6-sol/xhigh two-turn Responses proof (localhost only)'
 fi
 
 "$SCRIPT_DIR/runtime-image.sh" verify >/dev/null \

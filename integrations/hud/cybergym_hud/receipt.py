@@ -39,7 +39,9 @@ class NativeRunProfile(BaseModel):
     budget_profile: Literal["paper-eval-100", "script-default-10", "custom"]
     model: str = Field(min_length=1)
     reasoning_effort: Literal["xhigh"] | None = None
-    reasoning_transport: Literal["none", "gpt56_chat_completions_extra_body"] = "none"
+    reasoning_transport: Literal["none", "gpt56_openai_responses_bridge"] = "none"
+    response_storage: Literal["none", "openai_store_true"] = "none"
+    response_continuation: Literal["none", "per_llm_previous_response_id_exact_transcript_extensions"] = "none"
     omitted_sampling_parameters: tuple[Literal["temperature", "top_p", "stop"], ...] = ()
     max_iter: int = Field(ge=1)
     timeout_seconds: int = Field(ge=1)

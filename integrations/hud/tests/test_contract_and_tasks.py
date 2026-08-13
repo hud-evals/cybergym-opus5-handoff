@@ -29,7 +29,7 @@ def test_packaged_contract_and_checkout_are_pinned() -> None:
         "root": "unique_upstream_openhands_tmp_dir_per_rollout",
         "tracks_model_workspace": True,
         "shell_capability_published": False,
-        "cleanup": "deferred_until_after_hud_observer_flush_then_original_keep_tmp_policy",
+        "cleanup": "deferred_until_after_hud_observer_flush_with_narrow_root_owned_docker_fallback",
     }
     assert CONTRACT["runtime"]["batch_scheduling"] == {
         "engine": "hud_taskset_run",

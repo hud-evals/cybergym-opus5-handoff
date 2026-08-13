@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 from hud.environment import Answer, Environment, Workspace
 
+from .cleanup import cleanup_tracked_root
 from .grading import _error, grade_receipt
 from .receipt import NativeReceipt, NativeTaskBinding
 
@@ -45,7 +45,7 @@ def build_env(
             # per completed slot instead of retaining all roots until the batch
             # finishes.
             if cleanup_file_tracking_root:
-                shutil.rmtree(file_tracking_root, ignore_errors=True)
+                cleanup_tracked_root(file_tracking_root)
 
     @receipt_env.template(id="run_upstream_openhands", returns=NativeReceipt)
     async def run_upstream_openhands(task_id: str, server: str):

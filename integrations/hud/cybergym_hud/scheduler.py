@@ -6,7 +6,6 @@ import argparse
 import asyncio
 import json
 import os
-import shutil
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -19,6 +18,7 @@ from hud.eval.runtime import LocalRuntime
 from hud.settings import settings
 from hud.utils.platform import PlatformClient
 
+from .cleanup import cleanup_tracked_root
 from .contract import validate_contract
 from .env import build_env
 from .native import NativeOpenHandsAgent, NativeOpenHandsBatchAgent, NativeOpenHandsConfig
@@ -269,7 +269,7 @@ async def run_one(
         # The HUD observer flushes before taskset.run returns. Cleanup here
         # cannot erase the model's final workspace before telemetry captures it.
         if cleanup_after_rollout:
-            shutil.rmtree(rollout_config.tmp_dir, ignore_errors=True)
+            cleanup_tracked_root(rollout_config.tmp_dir)
 
 
 async def run_many(
@@ -344,7 +344,7 @@ async def run_many(
         # cancellation fallback for roots whose runtime never shut down.
         for task_id, rollout_config in rollout_configs.items():
             if cleanup_roots[task_id]:
-                shutil.rmtree(rollout_config.tmp_dir, ignore_errors=True)
+                cleanup_tracked_root(rollout_config.tmp_dir)
 
 
 def _parser() -> argparse.ArgumentParser:
