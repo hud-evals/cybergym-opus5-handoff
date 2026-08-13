@@ -211,6 +211,8 @@ def test_secret_entry_and_dispatch_never_put_values_in_argv() -> None:
     dispatcher = (OPS / "cybergym-ops").read_text(encoding="utf-8")
     assert "getpass.getpass" in configure
     assert "/dev/tty" in configure
+    assert 'open(tty_path, "r+"' not in configure
+    assert "stream=tty" not in configure
     assert "secrets.token_urlsafe" in configure
     assert "/etc/cybergym/server.env" in configure
     assert "/etc/cybergym/runner.env" in configure

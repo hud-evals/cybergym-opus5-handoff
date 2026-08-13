@@ -42,7 +42,7 @@ id "$OPERATOR" >/dev/null 2>&1 || { printf 'configure-secrets: unknown operator:
 [ -r /dev/tty ] && [ -w /dev/tty ] \
     || { printf '%s\n' 'configure-secrets: a controlling TTY is required (use ssh -t)' >&2; exit 1; }
 
-python3 - "$OPERATOR" /dev/tty <<'PY'
+python3 - "$OPERATOR" <<'PY'
 from __future__ import annotations
 
 import getpass
@@ -56,15 +56,18 @@ import tempfile
 from pathlib import Path
 
 operator = os.sys.argv[1]
-tty_path = os.sys.argv[2]
 account = pwd.getpwnam(operator)
 group = grp.getgrgid(account.pw_gid)
 
 
 def prompt_twice(label: str) -> str:
-    with open(tty_path, "r+", encoding="utf-8", buffering=1) as tty:
-        first = getpass.getpass(f"{label}: ", stream=tty)
-        second = getpass.getpass(f"Confirm {label}: ", stream=tty)
+    # getpass opens /dev/tty itself on Unix. Opening a character device as a
+    # seekable update-mode TextIOWrapper ("r+") fails on Python 3.12 before
+    # the first prompt with io.UnsupportedOperation. Keep the Python program
+    # on the heredoc stdin and let getpass independently own the controlling
+    # terminal for hidden input.
+    first = getpass.getpass(f"{label}: ")
+    second = getpass.getpass(f"Confirm {label}: ")
     if not first or first != second:
         raise SystemExit(f"{label} was empty or did not match; nothing was written")
     return first
