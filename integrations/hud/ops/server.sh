@@ -42,5 +42,5 @@ esac
 # Deliberately no --mask_map_path: the pinned OpenHands example submits the
 # real task ID. Binding only to the Docker bridge keeps private routes off LAN
 # and Tailscale interfaces while remaining reachable from agent containers.
-exec "$CG_UV_BIN" run --frozen --project "$CG_REPOSITORY_ROOT/integrations/hud" \
+exec "$CG_UV_BIN" run --frozen --no-sync --project "$CG_REPOSITORY_ROOT/integrations/hud" \
     python -m cybergym.server "$@"

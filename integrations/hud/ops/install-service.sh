@@ -57,7 +57,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/srv/cybergym /run /tmp /var/run/docker.sock
+ReadWritePaths=/srv/cybergym/results-og-fidelity /srv/cybergym/uv-cache /srv/cybergym/docker-config /run /tmp /var/run/docker.sock
 
 [Install]
 WantedBy=multi-user.target

@@ -79,7 +79,7 @@ printf '%s\n' 'Initializing the pinned agent submodule...'
 git -C "$REPOSITORY_ROOT" submodule update --init --recursive examples/agents
 
 printf '%s\n' 'Installing the HUD integration...'
-uv sync --project "$REPOSITORY_ROOT/integrations/hud" --extra test
+uv sync --frozen --project "$REPOSITORY_ROOT/integrations/hud" --extra test
 
 if [ "$SKIP_RUNTIME_IMAGE" -eq 0 ]; then
     "$SCRIPT_DIR/runtime-image.sh" ensure
@@ -97,6 +97,6 @@ if [ "$SKIP_OPENHANDS_BUILD" -eq 0 ]; then
     fi
 fi
 
-uv run --project "$REPOSITORY_ROOT/integrations/hud" cybergym-hud-verify \
+uv run --frozen --no-sync --project "$REPOSITORY_ROOT/integrations/hud" cybergym-hud-verify \
     --repository-root "$REPOSITORY_ROOT"
 printf '%s\n' 'Setup complete. Download task data/images, start the private server, then run ops/preflight.sh.'

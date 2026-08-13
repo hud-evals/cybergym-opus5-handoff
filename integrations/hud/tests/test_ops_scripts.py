@@ -214,6 +214,17 @@ def test_campaign_service_uses_a_deterministic_operator_path() -> None:
     assert "Environment=POETRY_CACHE_DIR=$POETRY_CACHE_DIR" in installer
 
 
+def test_setup_and_services_do_not_mutate_the_pinned_checkout() -> None:
+    setup = (OPS / "setup.sh").read_text(encoding="utf-8")
+    server = (OPS / "server.sh").read_text(encoding="utf-8")
+    server_installer = (OPS / "install-service.sh").read_text(encoding="utf-8")
+    assert 'uv sync --frozen --project "$REPOSITORY_ROOT/integrations/hud"' in setup
+    assert 'uv run --frozen --no-sync --project "$REPOSITORY_ROOT/integrations/hud"' in setup
+    assert '"$CG_UV_BIN" run --frozen --no-sync --project' in server
+    assert "ReadWritePaths=/srv/cybergym " not in server_installer
+    assert "ReadWritePaths=/srv/cybergym/results-og-fidelity" in server_installer
+
+
 def test_smoke_is_exactly_one_task_and_one_slot() -> None:
     text = (OPS / "smoke.sh").read_text(encoding="utf-8")
     assert "--all" not in text
