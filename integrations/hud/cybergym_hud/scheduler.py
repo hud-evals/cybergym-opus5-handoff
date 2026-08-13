@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import shutil
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
@@ -14,6 +15,8 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from hud.eval.runtime import LocalRuntime
+from hud.settings import settings
+from hud.utils.platform import PlatformClient
 
 from .contract import validate_contract
 from .env import build_env
@@ -23,6 +26,132 @@ from .taskset import make_taskset
 from .taskset import task_ids as catalog_task_ids
 
 DEFAULT_MAX_CONCURRENT = 15
+
+
+def _trace_key(value: object) -> str:
+    """Normalize API UUIDs and local uuid4().hex IDs for comparison."""
+
+    rendered = str(value)
+    try:
+        return UUID(rendered).hex
+    except ValueError:
+        return rendered
+
+
+async def require_remote_hud_receipt(job_id: str, trace_ids: tuple[str, ...]) -> tuple[str, ...]:
+    """Fail closed unless HUD exposes terminal, rewarded rows and events."""
+
+    expected = {_trace_key(trace_id) for trace_id in trace_ids}
+    client = PlatformClient.from_settings()
+    remote: dict[str, tuple[str, dict[str, Any]]] = {}
+    terminal: set[str] = set()
+    for attempt in range(3):
+        rows: list[Any] = []
+        # HUD caps this endpoint at 1,000 rows. The complete CyberGym catalog
+        # has 1,507 traces, so fetch pages instead of discovering this only
+        # after a fully paid campaign.
+        page_limit = 1000
+        for offset in range(0, max(len(trace_ids), 1), page_limit):
+            data = await client.aget(
+                f"/jobs/{job_id}/traces",
+                params={"limit": min(page_limit, max(len(trace_ids) - offset, 1)), "offset": offset},
+            )
+            page = data if isinstance(data, list) else data.get("items", [])
+            if isinstance(page, list):
+                rows.extend(page)
+        remote = {
+            _trace_key(row.get("id")): (str(row.get("id")), row)
+            for row in rows
+            if isinstance(row, dict) and row.get("id") is not None
+        }
+        terminal = {
+            trace_id
+            for trace_id, (_remote_id, row) in remote.items()
+            if row.get("status") in {"completed", "error", "cancelled"} and row.get("reward") is not None
+        }
+        if expected.issubset(terminal):
+            break
+        if attempt < 2:
+            await asyncio.sleep(1.0)
+    if not expected.issubset(terminal):
+        missing = sorted(expected.difference(remote))
+        nonterminal = sorted(expected.intersection(remote).difference(terminal))
+        raise RuntimeError(
+            "HUD did not expose terminal rewarded receipts after telemetry flush: "
+            f"missing={missing}, nonterminal={nonterminal}"
+        )
+
+    remote_ids = tuple(remote[_trace_key(trace_id)][0] for trace_id in trace_ids)
+    missing_events: list[str] = []
+    for trace_id in remote_ids:
+        observed = False
+        for attempt in range(3):
+            data = await client.aget(f"/trace/{trace_id}/events")
+            events = data.get("events", []) if isinstance(data, dict) else []
+            if isinstance(events, list) and events:
+                observed = True
+                break
+            if attempt < 2:
+                await asyncio.sleep(1.0)
+        if not observed:
+            missing_events.append(trace_id)
+    if missing_events:
+        raise RuntimeError("HUD receipts lack remotely readable telemetry events: " + ", ".join(missing_events))
+    return remote_ids
+
+
+def write_summary(path: Path, payload: dict[str, Any]) -> None:
+    """Atomically retain a non-secret local receipt before remote polling."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    encoded = (json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n").encode()
+    temporary = path.with_suffix(".tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(temporary, flags, 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+        remaining = memoryview(encoded)
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if written <= 0:
+                raise OSError("short write to CyberGym summary")
+            remaining = remaining[written:]
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    os.replace(temporary, path)
+
+
+async def verify_and_persist_remote_receipt(result: dict[str, Any], *, results_dir: Path) -> dict[str, Any]:
+    """Persist false-first HUD state, then replace it only after API proof."""
+
+    raw_runs = result.get("runs") if isinstance(result.get("runs"), list) else [result]
+    trace_ids = tuple(str(run["trace_id"]) for run in raw_runs if isinstance(run, dict) and run.get("trace_id"))
+    if len(trace_ids) != len(raw_runs):
+        raise RuntimeError("one or more completed HUD runs omitted a trace ID")
+    web = settings.hud_web_url.rstrip("/")
+    summary: dict[str, Any] = {
+        **result,
+        "job_url": f"{web}/jobs/{result['job_id']}",
+        "trace_ids": list(trace_ids),
+        "trace_urls": [f"{web}/trace/{trace_id}" for trace_id in trace_ids],
+        "hud_remote_receipt_verified": False,
+        "hud_remote_events_verified": False,
+    }
+    summary_path = results_dir / f"hud-summary-{result['job_id']}.json"
+    write_summary(summary_path, summary)
+    remote_ids = await require_remote_hud_receipt(str(result["job_id"]), trace_ids)
+    summary.update(
+        {
+            "trace_ids": list(remote_ids),
+            "trace_urls": [f"{web}/trace/{trace_id}" for trace_id in remote_ids],
+            "hud_remote_receipt_verified": True,
+            "hud_remote_events_verified": True,
+            "summary_path": str(summary_path),
+        }
+    )
+    write_summary(summary_path, summary)
+    return summary
 
 
 def prepare_tracked_rollout(
@@ -212,6 +341,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-dir", type=Path, required=True)
     parser.add_argument("--tmp-dir", type=Path, required=True)
     parser.add_argument("--base-url", default="")
+    parser.add_argument(
+        "--grader-server-mode",
+        choices=("images", "binary"),
+        default="images",
+        help="non-secret upstream server runtime profile recorded in the HUD receipt",
+    )
     parser.add_argument("--max-iter", type=int, default=10)
     parser.add_argument("--timeout", type=int, default=1200)
     parser.add_argument("--top-p", type=float, default=1.0)
@@ -264,6 +399,7 @@ def main() -> None:
         max_iter=args.max_iter,
         timeout=args.timeout,
         base_url=args.base_url,
+        grader_server_mode=args.grader_server_mode,
         top_p=args.top_p,
         temperature=args.temperature,
         max_output_tokens=args.max_output_tokens,
@@ -276,6 +412,7 @@ def main() -> None:
         result = asyncio.run(run_one(selected[0], config))
     else:
         result = asyncio.run(run_many(selected, config, max_concurrent=args.max_concurrent))
+    result = asyncio.run(verify_and_persist_remote_receipt(result, results_dir=args.log_dir.parent))
     print(json.dumps(result, indent=2, default=str))
     if result["is_error"]:
         raise SystemExit(2)

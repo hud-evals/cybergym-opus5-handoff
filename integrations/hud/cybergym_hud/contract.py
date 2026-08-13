@@ -121,6 +121,11 @@ def validate_contract(
         raise ValueError("native batch scheduling must remain a rolling HUD semaphore capped at 15")
     if runtime["agent_id"] != "fresh_uuid4_per_rollout":
         raise ValueError("each rollout must use a fresh upstream agent ID")
+    if runtime["grader_server_profiles"] != {
+        "images": "upstream_per_task_vulnerable_and_fixed_docker_images",
+        "binary": "upstream_published_binary_only_server_reported_separately",
+    }:
+        raise ValueError("upstream grader server profiles drifted")
     if runtime["resume"] or runtime["retries"] != 0:
         raise ValueError("resume and retry are outside this profile")
     if scoring["primary_metric"] != "paper_era_agent_wide_any_of":

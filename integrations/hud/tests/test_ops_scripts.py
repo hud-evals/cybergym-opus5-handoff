@@ -6,7 +6,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 OPS = ROOT / "integrations" / "hud" / "ops"
-SCRIPTS = tuple(OPS / name for name in ("setup.sh", "preflight.sh", "smoke.sh"))
+SCRIPTS = tuple(
+    OPS / name
+    for name in (
+        "setup.sh",
+        "preflight.sh",
+        "smoke.sh",
+        "configure-secrets.sh",
+        "install-service.sh",
+        "server.sh",
+        "cybergym-ops",
+    )
+)
 
 
 def _run(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -37,6 +48,18 @@ def test_preflight_contains_no_native_model_runner() -> None:
     assert "cybergym-hud-run-native" not in text
     assert "cybergym-hud-verify" in text
     assert "set -x" not in text
+    assert "set +x" in text
+    assert "eval " not in text
+    assert 'detail == "Record not found"' in text
+    assert 'detail == "Not found"' not in text
+    assert 'headers={"X-API-Key": os.environ["CYBERGYM_API_KEY"]}' in text
+    assert "hud models list --json" in text
+    assert "https://api.openai.com/v1/models/" in text
+    assert "SERVER_MODE=${CG_SERVER_MODE:-images}" in text
+    assert "cybergym/oss-fuzz-base-runner:latest" in text
+    assert 'IFS= read -r RUNNER_IMAGE <"$BINARY_TASK/$mode/runner"' in text
+    assert "git-lfs.github.com/spec/v1" in text
+    assert 'tar -tzf "$TASK_DATA/repo-vul.tar.gz"' in text
 
 
 def test_smoke_refuses_spend_before_preflight_or_uv() -> None:
@@ -69,14 +92,52 @@ def test_committed_env_template_has_names_but_no_secret_values() -> None:
         assert secret in assignments
         assert assignments[secret] == ""
     assert assignments["CG_SMOKE_TASK_ID"] == "arvo:10400"
+    assert assignments["CG_SERVER_MODE"] == "images"
+    assert assignments["CG_SERVER_BINARY_DIR"] == ""
+
+
+def test_integration_installs_the_upstream_server_extra() -> None:
+    text = (ROOT / "integrations" / "hud" / "pyproject.toml").read_text(encoding="utf-8")
+    assert '"cybergym[server]"' in text
+
+
+def test_secret_entry_and_dispatch_never_put_values_in_argv() -> None:
+    configure = (OPS / "configure-secrets.sh").read_text(encoding="utf-8")
+    dispatcher = (OPS / "cybergym-ops").read_text(encoding="utf-8")
+    assert "getpass.getpass" in configure
+    assert "/dev/tty" in configure
+    assert "secrets.token_urlsafe" in configure
+    assert "/etc/cybergym/server.env" in configure
+    assert "/etc/cybergym/runner.env" in configure
+    assert "HUD_API_KEY=" not in configure
+    assert "OPENAI_API_KEY=" not in configure
+    assert "try-restart" not in configure
+    assert "set +x" in dispatcher
+    assert 'exec "$SCRIPT_DIR/smoke.sh"' in dispatcher
+
+
+def test_private_server_is_unmasked_and_docker_bridge_only() -> None:
+    server = (OPS / "server.sh").read_text(encoding="utf-8")
+    installer = (OPS / "install-service.sh").read_text(encoding="utf-8")
+    assert "docker network inspect bridge" in server
+    assert "public default is forbidden" in server
+    assert "--mask_map_path" in server  # only in the explanatory no-mask comment
+    assert 'set -- "$@" --binary_dir' in server
+    assert "EnvironmentFile=/etc/cybergym/server.env" in installer
+    assert "systemctl enable cybergym-server.service" in installer
+    assert "systemctl restart cybergym-server.service" in installer
+    assert "systemctl is-active --quiet cybergym-server.service" in installer
+    assert "LimitCORE=0" in installer
 
 
 def test_readme_covers_operator_handoff_and_spend_guards() -> None:
     text = (ROOT / "integrations" / "hud" / "README.md").read_text(encoding="utf-8")
     for expected in (
         "ops/setup.sh",
-        "ops/preflight.sh",
-        "ops/smoke.sh --confirm-spend",
+        "ops/cybergym-ops preflight",
+        "ops/cybergym-ops smoke --confirm-spend",
+        "ops/configure-secrets.sh",
+        "ops/install-service.sh",
         "HUD_API_KEY",
         "filetracking/1",
         "--all --confirm-paid-all",

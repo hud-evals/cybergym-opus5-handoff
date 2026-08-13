@@ -1,0 +1,51 @@
+#!/bin/sh
+# Small operator dispatcher. It keeps credentials out of argv/history and
+# exposes an explicit spend boundary.
+set -eu
+set +x
+umask 077
+ulimit -c 0 2>/dev/null || true
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SERVER_ENV=${CYBERGYM_SERVER_ENV:-/etc/cybergym/server.env}
+RUNNER_ENV=${CYBERGYM_RUNNER_ENV:-/etc/cybergym/runner.env}
+
+usage() {
+    cat <<'EOF'
+Usage: cybergym-ops COMMAND [ARGS]
+
+Commands:
+  setup                 Install/build the pinned no-model runner
+  preflight             Authenticate and validate without a model call
+  smoke --confirm-spend Run one arvo:10400 rollout at concurrency 1
+  server-status         Show the private server service state
+EOF
+}
+
+[ "$#" -gt 0 ] || { usage >&2; exit 2; }
+COMMAND=$1
+shift
+
+case "$COMMAND" in
+    -h|--help|help) usage; exit 0 ;;
+    setup) exec "$SCRIPT_DIR/setup.sh" "$@" ;;
+    server-status) exec systemctl status --no-pager cybergym-server.service ;;
+    preflight|smoke)
+        for path in "$SERVER_ENV" "$RUNNER_ENV"; do
+            [ -r "$path" ] || { printf 'cybergym-ops: missing readable secret file: %s\n' "$path" >&2; exit 1; }
+            mode=$(stat -c '%a' "$path")
+            case "$mode" in 600|640) ;; *) printf 'cybergym-ops: unsafe mode %s on %s\n' "$mode" "$path" >&2; exit 1 ;; esac
+        done
+        set -a
+        # shellcheck disable=SC1090
+        . "$SERVER_ENV"
+        # shellcheck disable=SC1090
+        . "$RUNNER_ENV"
+        set +a
+        case "$COMMAND" in
+            preflight) exec "$SCRIPT_DIR/preflight.sh" "$@" ;;
+            smoke) exec "$SCRIPT_DIR/smoke.sh" "$@" ;;
+        esac
+        ;;
+    *) printf 'cybergym-ops: unknown command: %s\n' "$COMMAND" >&2; exit 2 ;;
+esac

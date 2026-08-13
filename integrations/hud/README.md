@@ -88,7 +88,7 @@ uv run --project integrations/hud cybergym-hud-verify \
   --repository-root "$PWD"
 ```
 
-### Task data and grader images
+### Task data and grader runtime
 
 The setup helper intentionally does not download the approximately 240-GB
 task corpus or the multi-terabyte full image set. Follow the upstream dataset
@@ -110,10 +110,38 @@ selection, place the selected task rows in a JSON file and use
 needs its task data plus both vulnerable and fixed grader images. These upstream
 image tags are mutable. Record the resolved image IDs/digests with the run.
 
+The upstream repository also publishes a binary-only server mode (about 130 GB)
+which executes the supplied vulnerable and fixed binaries in its official
+`cybergym/oss-fuzz-base-runner:latest` image. This is an upstream-supported
+runtime profile, but it is not byte-equivalent to the per-task image profile.
+Set `CG_SERVER_MODE=binary` and `CG_SERVER_BINARY_DIR` explicitly; preflight
+then verifies both selected binary trees and the runner image instead of
+silently accepting missing per-task images. Report image-mode and binary-mode
+scores separately.
+
 ### Secrets and non-secret operator settings
 
-Never commit, print, or pass a key on a command line. Create a private file
-outside the checkout and load it only in the process that needs it:
+Never commit, print, paste into chat, or pass a key on a command line. On a
+dedicated Linux worker the reviewed helper prompts through `/dev/tty`, rotates
+the private server key locally, and atomically writes two mode-0640 files:
+
+```bash
+sudo integrations/hud/ops/configure-secrets.sh --operator "$USER"
+```
+
+`/etc/cybergym/server.env` contains only the generated private-server
+credential and non-secret server paths. `/etc/cybergym/runner.env` contains the
+HUD and provider credentials plus non-secret runner settings. Both are owned by
+`root` and the operator's primary group; values are never echoed. The dispatcher
+loads both only inside the target process:
+
+```bash
+integrations/hud/ops/cybergym-ops preflight
+integrations/hud/ops/cybergym-ops smoke --confirm-spend
+```
+
+For a non-systemd development host, create a private file outside the checkout
+and load it only in the process that needs it:
 
 ```bash
 install -d -m 700 "$HOME/.config/hud-evals"
@@ -141,24 +169,27 @@ upstream OpenHands. Direct-provider runs leave it empty. The `CG_*` prefix is
 deliberate: arbitrary `CYBERGYM_*` aliases can collide with the server's
 pydantic settings namespace.
 
+The direct OpenAI smoke profile uses the pinned-upstream-compatible bare model
+name `gpt-4.1-2025-04-14`, `OPENAI_API_KEY`, and an empty
+`CG_MODEL_BASE_URL`. Do not prefix that name with `openai/`: this old upstream
+wrapper uses a different environment-variable branch for already-prefixed
+names. `DAYTONA_API_KEY` is not used by this native CyberGym path.
+
 ### Start the private PoC server
 
 The server must be reachable from both the Linux host and OpenHands containers,
-but must never be public. On a host using Docker's default bridge, bind to its
-queried gateway instead of hard-coding an address. In a dedicated terminal:
+but must never be public. On a non-systemd development host, source the private
+file and use the same reviewed server helper; it queries and binds Docker's
+default bridge and carries `CG_SERVER_MODE` (including `--binary_dir` when
+selected) consistently into the live process:
 
 ```bash
 (
   set -a
   . "$HOME/.config/hud-evals/cybergym.env"
   set +a
-  CG_SERVER_HOST=$(docker network inspect bridge \
-    -f '{{(index .IPAM.Config 0).Gateway}}')
-  export CG_SERVER_URL="http://$CG_SERVER_HOST:8666"
-  exec uv run --project integrations/hud python -m cybergym.server \
-    --host "$CG_SERVER_HOST" --port 8666 \
-    --log_dir "$CG_RESULTS_DIR/server" \
-    --db_path "$CG_RESULTS_DIR/server/poc.db"
+  export CG_UV_BIN="$(command -v uv)"
+  exec integrations/hud/ops/server.sh
 )
 ```
 
@@ -167,14 +198,31 @@ the runner. If a firewall-created internal Docker network is used, query that
 network's gateway instead. Do not use `127.0.0.1`: it points back to each agent
 container from inside Docker.
 
+For a durable worker, install the reviewed service after configuring secrets:
+
+```bash
+sudo integrations/hud/ops/install-service.sh --confirm-install \
+  --operator "$USER" --repository-root "$PWD"
+systemctl status --no-pager cybergym-server.service
+```
+
+The service runs this pinned checkout, deliberately passes no
+`--mask_map_path` because this OpenHands profile submits real task IDs, and
+binds only to the default Docker bridge gateway. It never binds the private
+routes to `0.0.0.0`, LAN, or Tailscale. A previously deployed masked leaderboard
+server is incompatible with this profile and must not be reused. The installer
+uses a new result-root database and does not delete historical server logs.
+
 ## No-spend preflight and one-task smoke
 
 Create the result root once, then run the preflight in a secret-scoped
 subshell. It validates native host/Docker identity, source fidelity, the pinned
 OpenHands build/runtime, the exact smoke task's data and two grader images,
-result-directory permissions, required key *presence*, and authenticated
-private-server reachability. It suppresses secret values and makes no model
-call.
+result-directory permissions, selected image/binary grader bytes, authenticated
+private-server reachability, HUD API authentication, and (for direct OpenAI)
+exact model access. It suppresses secret values and makes no completion/model
+call. Custom provider gateways are presence-checked because their discovery
+endpoints are protocol-specific.
 
 ```bash
 mkdir -p /path/to/cybergym-results/server
@@ -222,6 +270,7 @@ checks:
     --server "$CG_SERVER_URL" \
     --model "$CG_MODEL" \
     --base-url "$CG_MODEL_BASE_URL" \
+    --grader-server-mode "$CG_SERVER_MODE" \
     --log-dir "$CG_RESULTS_DIR/logs" \
     --tmp-dir "$CG_RESULTS_DIR/tmp" \
     --max-iter 100 --timeout 1200 --max-concurrent 15
@@ -256,6 +305,7 @@ cover the complete catalog:
     --server "$CG_SERVER_URL" \
     --model "$CG_MODEL" \
     --base-url "$CG_MODEL_BASE_URL" \
+    --grader-server-mode "$CG_SERVER_MODE" \
     --log-dir "$CG_RESULTS_DIR/logs" \
     --tmp-dir "$CG_RESULTS_DIR/tmp" \
     --max-iter 100 --timeout 1200 --max-concurrent 15
@@ -267,6 +317,12 @@ containing the HUD Job ID, aggregate counts, and ordered per-task receipts. A
 one-ID invocation retains the original one-shot JSON shape and includes its
 Job and Trace IDs. With `HUD_API_KEY` set, open them at
 `https://www.hud.ai/jobs/JOB_ID` and `https://www.hud.ai/trace/TRACE_ID`.
+The scheduler first writes `$CG_RESULTS_DIR/hud-summary-JOB_ID.json` with both remote
+verification fields false, then polls HUD for every terminal/rewarded trace and
+nonempty telemetry events before atomically replacing it with verified remote
+UUIDs and URLs. A transient HUD upload failure therefore makes the command
+fail after retaining a diagnostic local receipt; it cannot silently authorize
+widening a paid smoke.
 
 `cybergym_hud.taskset.make_taskset(...)` exposes all 1,507 pinned catalog rows
 (1,368 ARVO and 139 OSS-Fuzz) for programmatic scheduling. Native runs are

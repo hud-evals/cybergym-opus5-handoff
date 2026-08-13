@@ -46,6 +46,7 @@ class NativeRunProfile(BaseModel):
     seed: int | None = None
     native_tool_calling: bool | None = None
     base_url_mode: Literal["provider-default", "custom"]
+    grader_server_mode: Literal["images", "binary"] = "images"
     network_mode: Literal["upstream-openhands-native-docker-default"] = "upstream-openhands-native-docker-default"
     upstream_commit: Literal["7656b71d07da6694e262f9c34ea994cd4849c0eb"] = "7656b71d07da6694e262f9c34ea994cd4849c0eb"
     agent_commit: Literal["b5cbe061b25e5719d296711706710438f6693079"] = "b5cbe061b25e5719d296711706710438f6693079"

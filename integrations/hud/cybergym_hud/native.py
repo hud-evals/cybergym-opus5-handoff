@@ -10,7 +10,7 @@ from concurrent.futures import Executor
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from hud.agents.base import Agent
@@ -33,6 +33,7 @@ class NativeOpenHandsConfig:
     timeout: int = 1200
     llm_api_key: str | None = None
     base_url: str = ""
+    grader_server_mode: Literal["images", "binary"] = "images"
     native_tool_calling: bool | None = None
     top_p: float = 1.0
     temperature: float = 0.0
@@ -50,6 +51,8 @@ class NativeOpenHandsConfig:
             raise ValueError("timeout must be at least one second")
         if self.max_output_tokens < 1:
             raise ValueError("max_output_tokens must be positive")
+        if self.grader_server_mode not in {"images", "binary"}:
+            raise ValueError("grader_server_mode must be images or binary")
         return NativeOpenHandsConfig(
             repository_root=root,
             data_dir=self.data_dir.expanduser().resolve(),
@@ -61,6 +64,7 @@ class NativeOpenHandsConfig:
             timeout=self.timeout,
             llm_api_key=self.llm_api_key,
             base_url=self.base_url,
+            grader_server_mode=self.grader_server_mode,
             native_tool_calling=self.native_tool_calling,
             top_p=self.top_p,
             temperature=self.temperature,
@@ -89,6 +93,7 @@ class NativeOpenHandsConfig:
             seed=self.seed,
             native_tool_calling=self.native_tool_calling,
             base_url_mode="custom" if self.base_url else "provider-default",
+            grader_server_mode=self.grader_server_mode,
         )
 
 

@@ -21,9 +21,11 @@ from cybergym_hud.scheduler import (
     _parser,
     _resolve_selection,
     prepare_tracked_rollout,
+    require_remote_hud_receipt,
     run_many,
     run_one,
     summarize_job,
+    verify_and_persist_remote_receipt,
 )
 from cybergym_hud.tasks import make_task
 from cybergym_hud.taskset import task_ids
@@ -382,3 +384,92 @@ def test_batch_selection_requires_an_explicit_full_catalog_paid_guard() -> None:
     paid_all.max_concurrent = 16
     with pytest.raises(SystemExit):
         _resolve_selection(paid_all, parser)
+
+
+@pytest.mark.asyncio
+async def test_remote_hud_receipt_is_false_first_then_verified(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    observed_false_first = False
+
+    async def _verify(job_id: str, trace_ids: tuple[str, ...]) -> tuple[str, ...]:
+        nonlocal observed_false_first
+        saved = json.loads((tmp_path / "hud-summary-job-1.json").read_text(encoding="utf-8"))
+        observed_false_first = saved["hud_remote_receipt_verified"] is False
+        assert job_id == "job-1"
+        assert trace_ids == ("a" * 32,)
+        return ("11111111-1111-1111-1111-111111111111",)
+
+    monkeypatch.setattr("cybergym_hud.scheduler.require_remote_hud_receipt", _verify)
+    result = {
+        "job_id": "job-1",
+        "trace_id": "a" * 32,
+        "status": "completed",
+        "reward": 1.0,
+        "is_error": False,
+    }
+    summary = await verify_and_persist_remote_receipt(result, results_dir=tmp_path)
+
+    assert observed_false_first is True
+    assert summary["hud_remote_receipt_verified"] is True
+    assert summary["hud_remote_events_verified"] is True
+    assert summary["trace_ids"] == ["11111111-1111-1111-1111-111111111111"]
+    saved = json.loads((tmp_path / "hud-summary-job-1.json").read_text(encoding="utf-8"))
+    assert saved == summary
+    assert (tmp_path / "hud-summary-job-1.json").stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.asyncio
+async def test_remote_hud_failure_retains_unverified_local_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def _fail(_job_id: str, _trace_ids: tuple[str, ...]) -> tuple[str, ...]:
+        raise RuntimeError("telemetry unavailable")
+
+    monkeypatch.setattr("cybergym_hud.scheduler.require_remote_hud_receipt", _fail)
+    result = {
+        "job_id": "job-1",
+        "trace_id": "a" * 32,
+        "status": "completed",
+        "reward": 1.0,
+        "is_error": False,
+    }
+    with pytest.raises(RuntimeError, match="telemetry unavailable"):
+        await verify_and_persist_remote_receipt(result, results_dir=tmp_path)
+
+    saved = json.loads((tmp_path / "hud-summary-job-1.json").read_text(encoding="utf-8"))
+    assert saved["hud_remote_receipt_verified"] is False
+    assert saved["hud_remote_events_verified"] is False
+
+
+@pytest.mark.asyncio
+async def test_remote_hud_receipt_paginates_full_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested: list[tuple[str, dict[str, int] | None]] = []
+    trace_ids = tuple(UUID(int=index + 1).hex for index in range(1507))
+
+    class Client:
+        async def aget(self, path: str, *, params: dict[str, int] | None = None):
+            requested.append((path, params))
+            if path.endswith("/events"):
+                return {"events": [{"type": "step"}]}
+            assert params is not None
+            start = params["offset"]
+            stop = min(start + params["limit"], len(trace_ids))
+            return {
+                "items": [
+                    {"id": str(UUID(value)), "status": "completed", "reward": 0.0} for value in trace_ids[start:stop]
+                ]
+            }
+
+    monkeypatch.setattr(
+        "cybergym_hud.scheduler.PlatformClient.from_settings",
+        lambda: Client(),
+    )
+    remote = await require_remote_hud_receipt("job-full", trace_ids)
+    receipt_requests = [params for path, params in requested if path.endswith("/traces")]
+    assert receipt_requests == [{"limit": 1000, "offset": 0}, {"limit": 507, "offset": 1000}]
+    assert len(remote) == 1507

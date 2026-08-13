@@ -3,7 +3,7 @@ name = "cybergym-og-hud"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-  "cybergym",
+  "cybergym[server]",
   "docker>=7.1,<8",
   "hud==0.6.13",
   "httpx>=0.28,<1",
@@ -30,7 +30,7 @@ build-backend = "hatchling.build"
 packages = ["cybergym_hud"]
 
 [tool.hatch.build.targets.sdist]
-include = ["cybergym_hud", "README.md", "pyproject.toml"]
+include = ["cybergym_hud", "ops", "README.md", "pyproject.toml"]
 
 [tool.uv.sources]
 cybergym = { path = "../..", editable = true }

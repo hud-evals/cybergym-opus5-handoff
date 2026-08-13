@@ -52,6 +52,10 @@
       "isolated_upstream_module_per_rollout": true
     },
     "agent_id": "fresh_uuid4_per_rollout",
+    "grader_server_profiles": {
+      "images": "upstream_per_task_vulnerable_and_fixed_docker_images",
+      "binary": "upstream_published_binary_only_server_reported_separately"
+    },
     "resume": false,
     "retries": 0
   },

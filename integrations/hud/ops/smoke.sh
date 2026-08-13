@@ -1,6 +1,8 @@
 #!/bin/sh
 # Spend-gated one-task CyberGym smoke run.
 set -eu
+set +x
+ulimit -c 0 2>/dev/null || true
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 DEFAULT_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)
@@ -56,6 +58,7 @@ DATA_DIR=${CG_DATA_DIR:?CG_DATA_DIR is required}
 SERVER_URL=${CG_SERVER_URL:?CG_SERVER_URL is required}
 MODEL=${CG_MODEL:-claude-sonnet-4-5}
 RESULTS_DIR=${CG_RESULTS_DIR:?CG_RESULTS_DIR is required}
+SERVER_MODE=${CG_SERVER_MODE:-images}
 
 mkdir -p "$RESULTS_DIR/logs" "$RESULTS_DIR/tmp"
 
@@ -67,6 +70,7 @@ if [ -n "${CG_MODEL_BASE_URL:-}" ]; then
         --server "$SERVER_URL" \
         --model "$MODEL" \
         --base-url "$CG_MODEL_BASE_URL" \
+        --grader-server-mode "$SERVER_MODE" \
         --log-dir "$RESULTS_DIR/logs" \
         --tmp-dir "$RESULTS_DIR/tmp" \
         --max-iter 10 \
@@ -80,6 +84,7 @@ exec uv run --project "$REPOSITORY_ROOT/integrations/hud" cybergym-hud-run-nativ
     --data-dir "$DATA_DIR" \
     --server "$SERVER_URL" \
     --model "$MODEL" \
+    --grader-server-mode "$SERVER_MODE" \
     --log-dir "$RESULTS_DIR/logs" \
     --tmp-dir "$RESULTS_DIR/tmp" \
     --max-iter 10 \
