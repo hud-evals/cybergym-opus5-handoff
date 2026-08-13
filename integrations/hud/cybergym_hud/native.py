@@ -162,6 +162,7 @@ def _log_controller_termination(
         "RuntimeError: Agent reached maximum iteration in headless mode. "
         f"Current iteration: {max_iter}, max iteration: {max_iter}"
     )
+    expected_tail = f"{expected_reason!r}, observation=<ObservationType.AGENT_STATE_CHANGED: 'agent_state_changed'>)"
     error_lines: list[bool] = []
     try:
         log_paths = sorted(logs_dir.glob("openhands_*.log"))
@@ -170,8 +171,9 @@ def _log_controller_termination(
                 return "error"
             with log_path.open(encoding="utf-8", errors="replace") as handle:
                 for line in handle:
-                    if _OUTER_CONTROLLER_ERROR_LOG.match(line):
-                        error_lines.append(f"reason={expected_reason!r}" in line)
+                    match = _OUTER_CONTROLLER_ERROR_LOG.match(line)
+                    if match:
+                        error_lines.append(line[match.end() :].rstrip("\r\n") == expected_tail)
     except OSError:
         return "error"
     if not error_lines:

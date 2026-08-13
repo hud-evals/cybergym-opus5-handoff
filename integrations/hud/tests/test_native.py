@@ -365,11 +365,30 @@ def test_anchored_log_fallback_accepts_exact_max_iteration(tmp_path: Path) -> No
     (logs_dir / "openhands_test.log").write_text(
         "12:34:56 - openhands:DEBUG: agent_controller.py:428 - "
         "[Agent Controller 12345678-1234-5678-1234-567812345678] "
-        f"AgentStateChangedObservation(content='', agent_state='error', reason={reason!r})\n",
+        f"AgentStateChangedObservation(content='', agent_state='error', reason={reason!r}, "
+        "observation=<ObservationType.AGENT_STATE_CHANGED: 'agent_state_changed'>)\n",
         encoding="utf-8",
     )
 
     assert _controller_termination(receipt_dir, max_iter=17) == "max_iterations"
+
+
+def test_anchored_log_fallback_rejects_wrapped_max_iteration_text(tmp_path: Path) -> None:
+    receipt_dir = tmp_path / "run"
+    logs_dir = receipt_dir / "logs"
+    logs_dir.mkdir(parents=True)
+    expected_prefix = "RuntimeError: Agent reached maximum iteration in headless mode. "
+    expected = expected_prefix + "Current iteration: 17, max iteration: 17"
+    wrapped = f"unrelated provider failure containing reason={expected!r}"
+    (logs_dir / "openhands_test.log").write_text(
+        "12:34:56 - openhands:INFO: agent_controller.py:428 - "
+        "[Agent Controller 12345678-1234-5678-1234-567812345678] "
+        f"AgentStateChangedObservation(content='', agent_state='error', reason={wrapped!r}, "
+        "observation=<ObservationType.AGENT_STATE_CHANGED: 'agent_state_changed'>)\n",
+        encoding="utf-8",
+    )
+
+    assert _controller_termination(receipt_dir, max_iter=17) == "error"
 
 
 @pytest.mark.parametrize(
