@@ -208,9 +208,10 @@ scores separately.
 
 For a paid binary campaign, freeze the corpus under root ownership (without
 changing its reviewed mode bits), restart the pinned service, and capture its
-root-owned deployment seal. The later no-spend preflight binds the exact
-systemd invocation, clean checkout/helper, Python child, private listener
-socket, and binary directory to that seal:
+root-owned deployment seal. The later no-spend preflight binds the immutable
+unit, clean checkout/helper, service account, endpoint, and binary directory
+to that seal; it freshly verifies the current systemd invocation, Python
+child, and private listener socket after every service restart or reboot:
 
 ```bash
 sudo chown -hR root:root /srv/cybergym/cybergym-server-data

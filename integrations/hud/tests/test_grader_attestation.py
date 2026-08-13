@@ -11,6 +11,7 @@ from cybergym_hud.grader_attestation import (
     ProcessSnapshot,
     ServiceSnapshot,
     _validate_runtime,
+    attest_live_binary_server,
     load_binary_grader_manifest,
     load_deployment_seal,
 )
@@ -176,10 +177,98 @@ def test_deployment_seal_rejects_writable_or_malformed_files(tmp_path: Path) -> 
     path.chmod(0o666)
     with pytest.raises(GraderAttestationError, match="non-writable"):
         load_deployment_seal(path, require_root_owner=False)
-
     path.chmod(0o644)
     with pytest.raises(GraderAttestationError, match="unsupported schema"):
         load_deployment_seal(path, require_root_owner=False)
+
+
+def test_live_attestation_accepts_fresh_process_identity_after_service_restart(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repo"
+    binary = tmp_path / "binary"
+    root.mkdir()
+    binary.mkdir()
+    helper = root / "integrations/hud/ops/server.sh"
+    helper.parent.mkdir(parents=True)
+    helper.write_text("#!/bin/sh\n", encoding="utf-8")
+    revision = "a" * 40
+    tree = "b" * 40
+    helper_sha = "c" * 64
+    fragments = {"/etc/systemd/system/cybergym-server.service": "d" * 64}
+    seal = {
+        "schema_version": "1",
+        "captured_at": "2026-08-13T00:00:00+00:00",
+        "unit": "cybergym-server.service",
+        "invocation_id": "old-invocation",
+        "control_group": "/system.slice/cybergym-server.service",
+        "repository_root": str(root),
+        "repository_revision": revision,
+        "repository_tree": tree,
+        "server_helper": str(helper),
+        "server_helper_sha256": helper_sha,
+        "binary_dir": str(binary),
+        "host": "172.17.0.1",
+        "port": 8666,
+        "main_pid": 100,
+        "main_pid_start_ticks": 1000,
+        "server_pid": 101,
+        "server_pid_start_ticks": 1010,
+        "service_user": "rose",
+        "service_group": "rose",
+        "unit_fragments": fragments,
+    }
+    snapshot = ServiceSnapshot(
+        unit="cybergym-server.service",
+        active_state="active",
+        sub_state="running",
+        invocation_id="new-invocation",
+        main_pid=200,
+        control_group="/system.slice/cybergym-server.service",
+        exec_start="unused",
+        fragment_paths=(),
+        user="rose",
+        group="rose",
+        processes=(),
+    )
+    monkeypatch.setattr(
+        "cybergym_hud.grader_attestation._repository_identity",
+        lambda _root: {
+            "repository_revision": revision,
+            "repository_tree": tree,
+            "server_helper": str(helper),
+            "server_helper_sha256": helper_sha,
+        },
+    )
+    monkeypatch.setattr("cybergym_hud.grader_attestation.capture_service_snapshot", lambda *_args, **_kwargs: snapshot)
+    monkeypatch.setattr(
+        "cybergym_hud.grader_attestation._validate_runtime",
+        lambda *_args, **_kwargs: {
+            "main_pid": 200,
+            "main_pid_start_ticks": 2000,
+            "server_pid": 201,
+            "server_pid_start_ticks": 2010,
+            "binary_dir": str(binary),
+            "host": "172.17.0.1",
+            "port": 8666,
+            "listener_inode": 99,
+            "service_user": "rose",
+            "service_group": "rose",
+        },
+    )
+    monkeypatch.setattr("cybergym_hud.grader_attestation._unit_fragment_hashes", lambda _snapshot: fragments)
+
+    result = attest_live_binary_server(
+        deployment_seal=seal,
+        repository_root=root,
+        binary_dir=binary,
+        host="172.17.0.1",
+        port=8666,
+    )
+
+    assert result["invocation_id"] == "new-invocation"
+    assert result["main_pid"] == 200
 
 
 def test_committed_binary_manifest_pins_observed_tree() -> None:

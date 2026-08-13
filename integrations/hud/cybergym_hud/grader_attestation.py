@@ -563,7 +563,13 @@ def attest_live_binary_server(
     proc_root: Path = Path("/proc"),
     cgroup_root: Path = Path("/sys/fs/cgroup"),
 ) -> dict[str, Any]:
-    """Prove the current listener is the exact previously sealed deployment."""
+    """Prove the current listener uses the stable root-sealed deployment.
+
+    Process IDs, start ticks, socket inodes, and InvocationID are deliberately
+    observed afresh rather than compared with the seal. That keeps a reviewed
+    service restart/reboot recoverable while the root-owned seal still pins
+    the immutable unit, checkout, helper, account, endpoint, and binary root.
+    """
 
     seal = _validate_seal_shape(deployment_seal)
     expected_values = {
@@ -586,8 +592,6 @@ def attest_live_binary_server(
         if repository[field] != seal[field]:
             raise GraderAttestationError(f"live checkout differs from deployment seal: {field}")
     snapshot = capture_service_snapshot(unit, proc_root=proc_root, cgroup_root=cgroup_root)
-    if snapshot.invocation_id != seal["invocation_id"] or snapshot.control_group != seal["control_group"]:
-        raise GraderAttestationError("live systemd invocation differs from deployment seal")
     runtime = _validate_runtime(
         snapshot,
         repository_root=repository_root,
@@ -596,16 +600,9 @@ def attest_live_binary_server(
         port=port,
         proc_root=proc_root,
     )
-    for field in (
-        "main_pid",
-        "main_pid_start_ticks",
-        "server_pid",
-        "server_pid_start_ticks",
-        "service_user",
-        "service_group",
-    ):
+    for field in ("service_user", "service_group"):
         if runtime[field] != seal[field]:
-            raise GraderAttestationError(f"live service process differs from deployment seal: {field}")
+            raise GraderAttestationError(f"live service account differs from deployment seal: {field}")
     if _unit_fragment_hashes(snapshot) != seal["unit_fragments"]:
         raise GraderAttestationError("live systemd unit fragments differ from deployment seal")
 
