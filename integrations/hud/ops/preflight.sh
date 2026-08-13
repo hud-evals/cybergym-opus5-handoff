@@ -134,7 +134,7 @@ case "$DOCKER_PLATFORM" in
 esac
 
 [ -d "$REPOSITORY_ROOT/src/cybergym" ] || die "not a CyberGym checkout: $REPOSITORY_ROOT"
-"$UV_BIN" run --project "$REPOSITORY_ROOT/integrations/hud" cybergym-hud-verify \
+"$UV_BIN" run --frozen --no-sync --project "$REPOSITORY_ROOT/integrations/hud" cybergym-hud-verify \
     --repository-root "$REPOSITORY_ROOT" >/dev/null
 ok 'fidelity/source contract'
 
@@ -147,7 +147,7 @@ ok 'pinned OpenHands build'
 if [ "$MODEL" = gpt-5.6-sol ]; then
     [ "$REASONING_EFFORT" = xhigh ] \
         || die "gpt-5.6-sol runs require CG_REASONING_EFFORT=xhigh"
-    "$UV_BIN" run --project "$REPOSITORY_ROOT/integrations/hud" python \
+    "$UV_BIN" run --frozen --no-sync --project "$REPOSITORY_ROOT/integrations/hud" python \
         "$SCRIPT_DIR/verify-reasoning-transport.py" \
         --repository-root "$REPOSITORY_ROOT" >/dev/null \
         || die "pinned OpenHands did not complete the local two-turn gpt-5.6-sol/xhigh Responses proof"
@@ -243,7 +243,7 @@ esac
 
 # HUD telemetry is best-effort inside the SDK. Authenticate it before provider
 # spend so a mistyped key cannot produce a paid rollout with no remote Job.
-"$UV_BIN" run --project "$REPOSITORY_ROOT/integrations/hud" hud models list --json >/dev/null 2>&1 \
+"$UV_BIN" run --frozen --no-sync --project "$REPOSITORY_ROOT/integrations/hud" hud models list --json >/dev/null 2>&1 \
     || die "HUD_API_KEY authentication failed"
 ok 'HUD authentication (no model call)'
 
@@ -253,7 +253,7 @@ ok 'HUD authentication (no model call)'
 case "$MODEL" in
     gpt-*|o3*|o4*)
         if [ -z "$MODEL_BASE_URL" ]; then
-            "$UV_BIN" run --project "$REPOSITORY_ROOT/integrations/hud" python - "$MODEL" <<'PY' \
+            "$UV_BIN" run --frozen --no-sync --project "$REPOSITORY_ROOT/integrations/hud" python - "$MODEL" <<'PY' \
                 || die "OPENAI_API_KEY authentication or model access failed"
 import os
 import sys
@@ -281,7 +281,7 @@ SERVER_URL=${SERVER_URL%/}
 # detail "Record not found". A bad API key is also hidden behind HTTP 404, but
 # has detail "Not found". Inspect both status and body without putting the key
 # in argv, a temporary file, or output.
-"$UV_BIN" run --project "$REPOSITORY_ROOT/integrations/hud" python - "$SERVER_URL" <<'PY' \
+"$UV_BIN" run --frozen --no-sync --project "$REPOSITORY_ROOT/integrations/hud" python - "$SERVER_URL" <<'PY' \
     || die "private CyberGym server/authentication check failed at $SERVER_URL"
 import os
 import sys

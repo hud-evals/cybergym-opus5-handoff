@@ -66,7 +66,7 @@ mkdir -p "$RESULTS_DIR/campaign-gpt56-sol-200"
 # access without inference, server auth, and one concrete task end to end.
 CG_REPOSITORY_ROOT=$REPOSITORY_ROOT "$SCRIPT_DIR/preflight.sh"
 
-set -- "$UV_BIN" run --project "$REPOSITORY_ROOT/integrations/hud" cybergym-hud-preflight-catalog \
+set -- "$UV_BIN" run --frozen --no-sync --project "$REPOSITORY_ROOT/integrations/hud" cybergym-hud-preflight-catalog \
     --repository-root "$REPOSITORY_ROOT" \
     --data-dir "$DATA_DIR" \
     --source-provenance "$SOURCE_PROVENANCE" \

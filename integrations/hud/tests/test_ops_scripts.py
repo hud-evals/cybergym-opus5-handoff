@@ -192,8 +192,9 @@ def test_campaign_profile_resume_and_secret_boundaries_are_explicit() -> None:
         assert expected in campaign
     assert "CG_MODEL_BASE_URL" not in campaign.split('set -- "$UV_BIN"', 1)[1]
     assert "UV_BIN=${CG_UV_BIN:-uv}" in campaign
-    assert 'set -- "$UV_BIN" run' in campaign
-    assert 'set -- "$UV_BIN" run' in preflight
+    assert 'set -- "$UV_BIN" run --frozen --no-sync' in campaign
+    assert 'set -- "$UV_BIN" run --frozen --no-sync' in preflight
+    assert '"$UV_BIN" run --frozen --no-sync' in (OPS / "preflight.sh").read_text(encoding="utf-8")
     assert "OPENAI_API_KEY" not in campaign
     assert "HUD_API_KEY" not in campaign
     assert "CYBERGYM_API_KEY" not in campaign

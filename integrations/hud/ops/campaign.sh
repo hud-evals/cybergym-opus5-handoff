@@ -90,7 +90,7 @@ esac
     --repository-root "$REPOSITORY_ROOT" \
     --max-concurrent "$MAX_CONCURRENT"
 
-set -- "$UV_BIN" run --project "$REPOSITORY_ROOT/integrations/hud" cybergym-hud-run-campaign \
+set -- "$UV_BIN" run --frozen --no-sync --project "$REPOSITORY_ROOT/integrations/hud" cybergym-hud-run-campaign \
     --all --confirm-paid-all \
     --repository-root "$REPOSITORY_ROOT" \
     --data-dir "$DATA_DIR" \
