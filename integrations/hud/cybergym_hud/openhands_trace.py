@@ -15,7 +15,7 @@ import re
 import stat
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -30,20 +30,54 @@ REDACTION = "[REDACTED]"
 _MAX_TRACE_BYTES = 128 * 1024 * 1024
 _MAX_EXPORTED_FIELD_BYTES = 256 * 1024
 _RUNTIME_SECRET_NAME = re.compile(
-    r"(?:API_KEY|TOKEN|PASSWORD|SECRET|SECRET_ACCESS_KEY|CREDENTIALS|PRIVATE_KEY|AUTH|CHECKSUM)$",
+    r"(?:API_KEY|TOKEN|PASSWORD|SECRET|SECRET_ACCESS_KEY|CREDENTIALS|PRIVATE_KEY|AUTH|COOKIE|SESSION|CHECKSUM)$",
     re.IGNORECASE,
 )
 _SENSITIVE_FIELD = re.compile(
-    r"(?:api[_-]?key|access[_-]?token|auth(?:orization)?|bearer|cookie|password|secret|checksum|agent[_-]?id)",
+    r"(?:api[_-]?key|access[_-]?token|auth(?:orization)?|bearer|password|secret|checksum|"
+    r"agent[_-]?id|private[_-]?key|github[_-]?pat|session[_-]?id|"
+    r"(?:^|[_-])(?:token|cookies?|auth|credentials?|session(?:[_-]?id)?)$)",
     re.IGNORECASE,
 )
-_SECRET_PATTERNS = (
-    re.compile(r"(?i)\b(?:flag|ctf|picoctf|htb)\{[^}\r\n]{1,512}\}"),
-    re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{12,}\b"),
-    re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}"),
-    re.compile(
-        r"(?i)\b(api[_-]?key|access[_-]?token|password|secret|checksum|agent[_-]?id)"
-        r"(\s*[=:]\s*)['\"]?[^\s'\",;]+"
+_SENSITIVE_ASSIGNMENT_NAME = (
+    r"[A-Za-z0-9_-]{0,64}(?:API[_-]?KEY|TOKEN|COOKIE|AUTH|PASSWORD|SECRET|CHECKSUM|AGENT[_-]?ID|"
+    r"PRIVATE[_-]?KEY|CREDENTIALS?|SESSION(?:[_-]?ID)?)|github[_-]?pat"
+)
+_TEXT_REDACTIONS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"(?i)\b(?:flag|ctf|picoctf|htb)\{[^}\r\n]{1,512}\}"), REDACTION),
+    (
+        re.compile(
+            r"(?i)\b(?:sk-(?:proj-|ant-)?|sess-|github_pat_|gh[pousr]_|glpat-|hf_|xox[a-z]-)"
+            r"[A-Za-z0-9._-]{8,}\b"
+        ),
+        REDACTION,
+    ),
+    (re.compile(r"\b(?:AIza[0-9A-Za-z_-]{20,}|(?:AKIA|ASIA)[A-Z0-9]{16})\b"), REDACTION),
+    (re.compile(r"(?i)\b(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}"), rf"\1{REDACTION}"),
+    (
+        re.compile(r"(?i)\b(Authorization\s*:\s*Basic\s+)[A-Za-z0-9+/=]{8,}"),
+        rf"\1{REDACTION}",
+    ),
+    (
+        re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
+        REDACTION,
+    ),
+    (re.compile(r"(?im)^(\s*(?:Cookie|Set-Cookie)\s*:\s*)[^\r\n]+"), rf"\1{REDACTION}"),
+    (
+        re.compile(
+            rf"(?i)(?<![A-Za-z0-9_-])"
+            rf"(['\"]?(?:{_SENSITIVE_ASSIGNMENT_NAME})['\"]?(?![A-Za-z0-9_-])\s*[:=]\s*)"
+            rf"(['\"])[^'\"\r\n]{{1,2048}}\2"
+        ),
+        rf"\1\2{REDACTION}\2",
+    ),
+    (
+        re.compile(
+            rf"(?i)(?<![A-Za-z0-9_-])"
+            rf"(['\"]?(?:{_SENSITIVE_ASSIGNMENT_NAME})['\"]?(?![A-Za-z0-9_-])\s*[:=]\s*)"
+            rf"[^\s,;}}\]]+"
+        ),
+        rf"\1{REDACTION}",
     ),
 )
 
@@ -65,7 +99,7 @@ class DecodedOpenHandsEvent:
 
     event_id: str
     timestamp: str | None
-    kind: Literal["user", "action", "observation", "skip"]
+    kind: Literal["user", "agent_text", "action", "observation", "skip"]
     text: str | None = None
     action_name: str | None = None
     cause: str | None = None
@@ -108,10 +142,8 @@ class _Redactor:
             return None
         for secret in self.values:
             value = value.replace(secret, REDACTION)
-        value = _SECRET_PATTERNS[0].sub(REDACTION, value)
-        value = _SECRET_PATTERNS[1].sub(REDACTION, value)
-        value = _SECRET_PATTERNS[2].sub(REDACTION, value)
-        value = _SECRET_PATTERNS[3].sub(lambda match: f"{match.group(1)}{match.group(2)}{REDACTION}", value)
+        for pattern, replacement in _TEXT_REDACTIONS:
+            value = pattern.sub(replacement, value)
         return value
 
     def value(self, value: Any, *, key: str | None = None) -> Any:
@@ -122,7 +154,16 @@ class _Redactor:
         if isinstance(value, list):
             return [self.value(item) for item in value]
         if isinstance(value, dict):
-            return {str(item_key): self.value(item, key=str(item_key)) for item_key, item in value.items()}
+            rendered: dict[str, Any] = {}
+            for item_key, item in value.items():
+                raw_key = str(item_key)
+                redacted_key = self._raw_text(raw_key)
+                if redacted_key is None:
+                    raise TraceImportError("tool argument key unexpectedly disappeared")
+                if redacted_key in rendered:
+                    raise TraceImportError("tool argument key redaction collapsed distinct keys")
+                rendered[redacted_key] = self.value(item, key=raw_key)
+            return rendered
         if value is None or isinstance(value, (bool, int, float)):
             return value
         raise TraceImportError(f"unsupported value in tool arguments: {type(value).__name__}")
@@ -199,6 +240,54 @@ def _timestamp(value: object, *, label: str) -> str | None:
     return parsed.isoformat().replace("+00:00", "Z")
 
 
+def _projection_timestamp(value: str | None, *, key: str, field: str) -> datetime:
+    if value is None:
+        raise TraceImportError(f"projected step {key} has no {field} timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise TraceImportError(f"projected step {key} has invalid {field} timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise TraceImportError(f"projected step {key} has a naive {field} timestamp")
+    return parsed.astimezone(UTC)
+
+
+def _normalize_projection_timestamps(steps: Sequence[ProjectedStep]) -> tuple[ProjectedStep, ...]:
+    """Make control-plane sorting preserve exact semantic projection order."""
+
+    normalized: list[ProjectedStep] = []
+    previous_start: datetime | None = None
+    for item in steps:
+        original_start = _projection_timestamp(
+            item.step.started_at,
+            key=item.key,
+            field="start",
+        )
+        original_end = _projection_timestamp(
+            item.step.ended_at,
+            key=item.key,
+            field="end",
+        )
+        duration = max(original_end - original_start, timedelta(0))
+        start = original_start
+        if previous_start is not None and start <= previous_start:
+            start = previous_start + timedelta(microseconds=1)
+        end = start + duration
+        normalized.append(
+            ProjectedStep(
+                item.key,
+                item.step.model_copy(
+                    update={
+                        "started_at": start.isoformat().replace("+00:00", "Z"),
+                        "ended_at": end.isoformat().replace("+00:00", "Z"),
+                    }
+                ),
+            )
+        )
+        previous_start = start
+    return tuple(normalized)
+
+
 class OpenHandsEventProjector:
     """Decode and project append-only OpenHands trajectory event objects."""
 
@@ -223,6 +312,17 @@ class OpenHandsEventProjector:
             args = _mapping(event.get("args"), label=f"{origin} user event {event_id} args")
             text = _string(args.get("content"), label=f"{origin} user event {event_id} content")
             return DecodedOpenHandsEvent(event_id, timestamp, "user", text=self._redactor.text(text))
+        if source == "agent" and action == "message" and event.get("tool_call_metadata") is None:
+            args = _mapping(event.get("args"), label=f"{origin} agent message {event_id} args")
+            text = _string(args.get("content"), label=f"{origin} agent message {event_id} content")
+            if not text.strip():
+                raise TraceImportError(f"{origin} agent message {event_id} content is blank")
+            return DecodedOpenHandsEvent(
+                event_id,
+                timestamp,
+                "agent_text",
+                text=self._redactor.text(text),
+            )
 
         metadata = _mapping(event.get("tool_call_metadata"), label=f"{origin} event {event_id} metadata")
         call_id = _string(metadata.get("tool_call_id"), label=f"{origin} event {event_id} call id")
@@ -506,13 +606,25 @@ class OpenHandsEventProjector:
                         ),
                     )
                 )
+            elif event.kind == "agent_text":
+                output.append(
+                    ProjectedStep(
+                        f"agent-message:{event.event_id}",
+                        AgentStep(
+                            content=event.text,
+                            done=False,
+                            started_at=event.timestamp,
+                            ended_at=event.timestamp,
+                        ),
+                    )
+                )
             elif event.response_id and event.response_id not in seen_responses:
                 seen_responses.add(event.response_id)
                 if event.response_id == incomplete_response:
                     output.extend(projected_groups.get(event.response_id, ()))
                     break
                 output.extend(projected_groups[event.response_id])
-        return tuple(output)
+        return _normalize_projection_timestamps(output)
 
 
 def runtime_secret_values(environ: Mapping[str, str] | None = None) -> tuple[str, ...]:

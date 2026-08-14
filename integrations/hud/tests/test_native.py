@@ -26,7 +26,11 @@ from cybergym_hud.native import (
     _OpenHandsSubprocessProxy,
     execute_upstream_openhands,
 )
-from cybergym_hud.openhands_trace import ProjectedStep, TraceImportResult
+from cybergym_hud.openhands_trace import (
+    ProjectedStep,
+    TraceImportResult,
+    build_trace_import_metadata,
+)
 from cybergym_hud.receipt import NativeReceipt, NativeTaskBinding
 
 
@@ -316,12 +320,15 @@ def test_trace_tailer_finalizes_after_upstream_error(
         def start(self) -> None:
             events.append("start")
 
-        def finish(self) -> None:
-            events.append("finish")
+        def finish(self, *, final_projection: bool) -> None:
+            events.append(f"finish:{final_projection}")
+
+        def projection_snapshot(self) -> tuple[ProjectedStep, ...]:
+            return ()
 
     monkeypatch.setattr(
         "cybergym_hud.native._make_openhands_trace_tailer",
-        lambda _config, _receipt_dir: FakeTailer(),
+        lambda _config, _receipt_dir, **_kwargs: FakeTailer(),
     )
     configured = replace(config, trace_step_sink=lambda _step: None)
     receipt = execute_upstream_openhands(
@@ -332,7 +339,7 @@ def test_trace_tailer_finalizes_after_upstream_error(
     )
 
     assert receipt.status == "error"
-    assert events == ["start", "finish"]
+    assert events == ["start", "finish:False"]
 
 
 def test_zero_exit_openhands_controller_error_becomes_infra_receipt(config: NativeOpenHandsConfig) -> None:
@@ -566,24 +573,24 @@ async def test_hud_agent_writes_typed_receipt_to_trace(
         log_dir=str(config.log_dir / "run"),
     )
 
-    def executor(_config, binding):
+    projected = ProjectedStep(
+        "response:fixture",
+        AgentStep(content="finished", done=True),
+    )
+
+    def executor(runtime_config, binding):
         assert binding.task_id == "arvo:10013"
+        assert runtime_config.trace_step_sink is not None
+        assert runtime_config.trace_projection_sink is not None
+        runtime_config.trace_step_sink(projected.step)
+        runtime_config.trace_projection_sink((projected,))
         return expected
 
     monkeypatch.setattr(
         "cybergym_hud.native.import_openhands_trace",
         lambda *_args, **_kwargs: TraceImportResult(
-            steps=(ProjectedStep("response:fixture", AgentStep(content="finished", done=True)),),
-            metadata={
-                "schema_version": "1",
-                "status": "completed",
-                "projected_step_count": 1,
-                "agent_step_count": 1,
-                "tool_step_count": 0,
-                "user_step_count": 0,
-                "source_has_tool_actions": False,
-                "projected_steps_sha256": "a" * 64,
-            },
+            steps=(projected,),
+            metadata=build_trace_import_metadata((projected,), status="completed"),
         ),
     )
 
@@ -631,7 +638,13 @@ async def test_projected_steps_are_acknowledged_on_the_event_loop_before_receipt
 
     def executor(runtime_config, _binding):
         assert runtime_config.trace_step_sink is not None
-        runtime_config.trace_step_sink(AgentStep(content="visible native turn"))
+        assert runtime_config.trace_projection_sink is not None
+        projected = ProjectedStep(
+            "response:visible",
+            AgentStep(content="visible native turn"),
+        )
+        runtime_config.trace_step_sink(projected.step)
+        runtime_config.trace_projection_sink((projected,))
         # The sink blocks until run.record completed on the loop thread.
         assert len(trace.steps) == 1
         return expected
@@ -644,6 +657,7 @@ async def test_projected_steps_are_acknowledged_on_the_event_loop_before_receipt
 
     run = SimpleNamespace(
         prompt_text=NativeTaskBinding(task_id="arvo:10013", server=config.server).model_dump_json(),
+        _args=_task_args(NativeTaskBinding(task_id="arvo:10013", server=config.server)),
         trace=trace,
         record=record,
     )
@@ -651,7 +665,7 @@ async def test_projected_steps_are_acknowledged_on_the_event_loop_before_receipt
 
     assert trace.steps[0].content == "visible native turn"
     assert all(thread_id == loop_thread for thread_id in record_threads)
-    assert flush_calls == [30.0]
+    assert flush_calls == [30.0, 30.0]
 
 
 @pytest.mark.asyncio
@@ -672,6 +686,7 @@ async def test_false_telemetry_flush_changes_completion_to_error(
     trace = Trace()
     run = SimpleNamespace(
         prompt_text=NativeTaskBinding(task_id="arvo:10013", server=config.server).model_dump_json(),
+        _args=_task_args(NativeTaskBinding(task_id="arvo:10013", server=config.server)),
         trace=trace,
         record=trace.record,
     )

@@ -20,7 +20,11 @@ from hud.graders import EvaluationResult
 from cybergym_hud.contract import OG_PROMPT
 from cybergym_hud.env import build_env
 from cybergym_hud.native import NativeOpenHandsAgent, NativeOpenHandsConfig
-from cybergym_hud.openhands_trace import ProjectedStep, TraceImportResult
+from cybergym_hud.openhands_trace import (
+    ProjectedStep,
+    TraceImportResult,
+    build_trace_import_metadata,
+)
 from cybergym_hud.receipt import NativeReceipt, NativeTaskBinding
 from cybergym_hud.scheduler import (
     _parser,
@@ -37,22 +41,19 @@ from cybergym_hud.taskset import task_ids
 
 
 def _remote_projected_events() -> list[dict[str, object]]:
+    projected = ProjectedStep(
+        "response:fixture",
+        AgentStep(content="finished", done=True),
+    )
     return [
-        {"kind": "agent_message", "text": None, "reasoning": None, "tool_calls": [{"id": "call-1"}]},
-        {"kind": "tool_call", "name": "execute_bash"},
+        {"kind": "agent_message", "text": "finished", "reasoning": None, "tool_calls": []},
         {
             "kind": "raw",
             "attributes": {
-                "openhands_trace_import": {
-                    "schema_version": "1",
-                    "status": "completed",
-                    "projected_step_count": 2,
-                    "agent_step_count": 1,
-                    "tool_step_count": 1,
-                    "user_step_count": 0,
-                    "source_has_tool_actions": True,
-                    "projected_steps_sha256": "a" * 64,
-                }
+                "openhands_trace_import": build_trace_import_metadata(
+                    (projected,),
+                    status="completed",
+                )
             },
         },
     ]
@@ -126,7 +127,16 @@ async def test_end_to_end_hud_receipt_and_upstream_grade(
         tmp_dir=tmp_path / "tmp",
     )
 
-    def executor(_config, binding):
+    projected = ProjectedStep(
+        "response:fixture",
+        AgentStep(content="finished", done=True),
+    )
+
+    def executor(runtime_config, binding):
+        assert runtime_config.trace_step_sink is not None
+        assert runtime_config.trace_projection_sink is not None
+        runtime_config.trace_step_sink(projected.step)
+        runtime_config.trace_projection_sink((projected,))
         return NativeReceipt(
             status="completed",
             task_id=binding.task_id,
@@ -140,17 +150,8 @@ async def test_end_to_end_hud_receipt_and_upstream_grade(
     monkeypatch.setattr(
         "cybergym_hud.native.import_openhands_trace",
         lambda *_args, **_kwargs: TraceImportResult(
-            steps=(ProjectedStep("response:fixture", AgentStep(content="finished", done=True)),),
-            metadata={
-                "schema_version": "1",
-                "status": "completed",
-                "projected_step_count": 1,
-                "agent_step_count": 1,
-                "tool_step_count": 0,
-                "user_step_count": 0,
-                "source_has_tool_actions": False,
-                "projected_steps_sha256": "a" * 64,
-            },
+            steps=(projected,),
+            metadata=build_trace_import_metadata((projected,), status="completed"),
         ),
     )
 
@@ -325,7 +326,15 @@ async def test_run_many_uses_a_rolling_fifteen_slot_window_with_isolated_cleanup
     expected_config = config.normalized()
 
     unchanged_fields = {
-        field.name for field in fields(NativeOpenHandsConfig) if field.name not in {"tmp_dir", "remove_tmp"}
+        field.name
+        for field in fields(NativeOpenHandsConfig)
+        if field.name
+        not in {
+            "tmp_dir",
+            "remove_tmp",
+            "trace_step_sink",
+            "trace_projection_sink",
+        }
     }
 
     def executor(rollout_config: NativeOpenHandsConfig, binding: NativeTaskBinding) -> NativeReceipt:

@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from hud.agents.types import AgentStep
 
 from cybergym_hud.campaign import (
     CAMPAIGN_JOB_NAME,
@@ -20,25 +21,24 @@ from cybergym_hud.campaign import (
     validate_campaign_profile,
 )
 from cybergym_hud.native import NativeOpenHandsConfig
+from cybergym_hud.openhands_trace import ProjectedStep, build_trace_import_metadata
 from cybergym_hud.receipt import NativeReceipt
 
 
 def _remote_projected_events() -> list[dict[str, object]]:
+    projected = ProjectedStep(
+        "response:fixture",
+        AgentStep(content="finished", done=True),
+    )
     return [
         {"kind": "agent_message", "text": "finished", "reasoning": None, "tool_calls": []},
         {
             "kind": "raw",
             "attributes": {
-                "openhands_trace_import": {
-                    "schema_version": "1",
-                    "status": "completed",
-                    "projected_step_count": 1,
-                    "agent_step_count": 1,
-                    "tool_step_count": 0,
-                    "user_step_count": 0,
-                    "source_has_tool_actions": False,
-                    "projected_steps_sha256": "a" * 64,
-                }
+                "openhands_trace_import": build_trace_import_metadata(
+                    (projected,),
+                    status="completed",
+                )
             },
         },
     ]

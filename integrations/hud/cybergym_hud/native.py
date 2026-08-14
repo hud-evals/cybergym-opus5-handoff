@@ -20,13 +20,19 @@ from typing import Any, Literal
 from uuid import UUID, uuid4
 
 import tomli_w
+from cybergym.task.types import generate_agent_id_and_checksum
 from hud.agents.base import Agent
 from hud.telemetry import flush as flush_telemetry
 from hud.telemetry.context import get_current_trace_id
 from hud.types import Step
 
-from .contract import openhands_system_prompt, repository_root, validate_contract
-from .openhands_trace import import_openhands_trace, runtime_secret_values
+from .contract import OG_PROMPT, openhands_system_prompt, repository_root, validate_contract
+from .openhands_trace import (
+    ProjectedStep,
+    build_trace_import_metadata,
+    import_openhands_trace,
+    runtime_secret_values,
+)
 from .receipt import NativeReceipt, NativeRunProfile, NativeTaskBinding, normalize_server
 from .trace_tail import OpenHandsEventTailer, OpenHandsTraceError
 from .upstream import require_upstream_agent_checkout
@@ -70,6 +76,11 @@ class NativeOpenHandsConfig:
     # every durable receipt/profile so callable state and trace credentials
     # can never enter campaign journals.
     trace_step_sink: Callable[[Step], None] | None = field(default=None, repr=False, compare=False)
+    trace_projection_sink: Callable[[tuple[ProjectedStep, ...]], None] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     def normalized(self) -> NativeOpenHandsConfig:
         root = repository_root(self.repository_root)
@@ -122,6 +133,7 @@ class NativeOpenHandsConfig:
             runtime_memory_bytes=self.runtime_memory_bytes,
             runtime_memory_swap_bytes=self.runtime_memory_swap_bytes,
             trace_step_sink=self.trace_step_sink,
+            trace_projection_sink=self.trace_projection_sink,
         )
 
     def receipt_profile(self) -> NativeRunProfile:
@@ -336,20 +348,18 @@ class _OpenHandsSubprocessProxy:
         return self._delegate.run(command, *args, **kwargs)
 
 
-def _trace_redactions(config: NativeOpenHandsConfig) -> tuple[str, ...]:
+def _trace_redactions(
+    config: NativeOpenHandsConfig,
+    *,
+    exact: tuple[str, ...] = (),
+) -> tuple[str, ...]:
     """Collect exact secrets that could plausibly reach the child/event store."""
 
     candidates = [
         config.llm_api_key,
         config.base_url,
-        *(os.environ.get(name) for name in (
-            "OPENAI_API_KEY",
-            "ANTHROPIC_API_KEY",
-            "LLM_API_KEY",
-            "HUD_API_KEY",
-            "CYBERGYM_API_KEY",
-            "DAYTONA_API_KEY",
-        )),
+        *exact,
+        *runtime_secret_values(),
     ]
     return tuple(value for value in candidates if value)
 
@@ -357,6 +367,8 @@ def _trace_redactions(config: NativeOpenHandsConfig) -> tuple[str, ...]:
 def _make_openhands_trace_tailer(
     config: NativeOpenHandsConfig,
     receipt_log_dir: Path,
+    *,
+    exact_redactions: tuple[str, ...],
 ) -> OpenHandsEventTailer:
     """Build the live bridge lazily so direct receipt-only calls stay cheap."""
 
@@ -366,8 +378,14 @@ def _make_openhands_trace_tailer(
 
     return OpenHandsEventTailer(
         receipt_log_dir,
-        projector=OpenHandsEventProjector(redactions=_trace_redactions(config)),
+        projector=OpenHandsEventProjector(
+            redactions=_trace_redactions(config, exact=exact_redactions)
+        ),
         sink=config.trace_step_sink,
+        project_kwargs={
+            "origin": "event_store",
+            "skip_initial_user_prompt": OG_PROMPT,
+        },
     )
 
 
@@ -427,6 +445,19 @@ def execute_upstream_openhands(
         )
     fresh_uuid = uuid_factory()
     agent_id = fresh_uuid.hex
+    generated_agent_id, checksum = generate_agent_id_and_checksum(
+        binding.task_id,
+        agent_id=agent_id,
+    )
+    if generated_agent_id != agent_id:
+        return NativeReceipt(
+            status="error",
+            task_id=binding.task_id,
+            server=binding.server,
+            run_profile=run_profile,
+            agent_id=agent_id,
+            error="CyberGym generated a different native agent identity",
+        )
     run_name = f"{binding.task_id.replace(':', '_')}-{agent_id}"
     receipt_log_dir = config.log_dir / run_name
 
@@ -472,7 +503,11 @@ def execute_upstream_openhands(
     try:
         if config.trace_step_sink is not None:
             try:
-                trace_tailer = _make_openhands_trace_tailer(config, receipt_log_dir)
+                trace_tailer = _make_openhands_trace_tailer(
+                    config,
+                    receipt_log_dir,
+                    exact_redactions=(agent_id, checksum, binding.server),
+                )
                 trace_tailer.start()
                 trace_tailer_started = True
             except Exception:
@@ -488,8 +523,15 @@ def execute_upstream_openhands(
                 # This is also the final full reconciliation.  It runs after
                 # upstream cleanup on success, exception, timeout, and the
                 # cancellation path (which waits for this worker to return).
-                trace_tailer.finish()
-            except OpenHandsTraceError:
+                trace_tailer.finish(
+                    final_projection=upstream_error is None and returned == agent_id,
+                )
+                if config.trace_projection_sink is not None:
+                    snapshot = trace_tailer.projection_snapshot()
+                    if not all(isinstance(item, ProjectedStep) for item in snapshot):
+                        raise OpenHandsTraceError("OpenHands final projection snapshot is malformed")
+                    config.trace_projection_sink(snapshot)
+            except Exception:
                 trace_projection_failed = True
         upstream.uuid4 = original_uuid4
         if config.reasoning_effort or runtime_kwargs is not None:
@@ -619,6 +661,15 @@ async def _run_and_record(
 ) -> None:
     """Execute one bound native rollout and attach its typed HUD receipt."""
 
+    live_projections: list[tuple[ProjectedStep, ...]] = []
+
+    def capture_projection(steps: tuple[ProjectedStep, ...]) -> None:
+        if live_projections:
+            raise RuntimeError("native executor returned more than one final trace projection")
+        if not all(isinstance(item, ProjectedStep) for item in steps):
+            raise TypeError("native executor returned a malformed final trace projection")
+        live_projections.append(steps)
+
     try:
         task_args = getattr(run, "_args", None)
         if not isinstance(task_args, Mapping):
@@ -627,7 +678,11 @@ async def _run_and_record(
         if binding.server != config.server:
             raise ValueError("HUD task server does not match native runner configuration")
         loop = asyncio.get_running_loop()
-        runtime_config = replace(config, trace_step_sink=_threadsafe_trace_sink(run, loop))
+        runtime_config = replace(
+            config,
+            trace_step_sink=_threadsafe_trace_sink(run, loop),
+            trace_projection_sink=capture_projection,
+        )
         worker = loop.run_in_executor(worker_pool, executor, runtime_config, binding)
         try:
             # Shield the native call so cancelling the HUD coroutine cannot
@@ -677,6 +732,7 @@ async def _run_and_record(
                 error=f"native scheduler failed: {type(exc).__name__}: {exc}",
             )
 
+    projection_receipt = receipt
     try:
         flushed = await asyncio.to_thread(flush_telemetry, 30.0)
     except Exception:
@@ -684,38 +740,51 @@ async def _run_and_record(
     if not flushed:
         receipt = _telemetry_error_receipt(receipt)
 
-    payload = receipt.model_dump(mode="json")
-    run.trace.content = receipt.model_dump_json()
-    run.trace.extra.update(
-        {
-            "runner": receipt.runner,
-            "native_openhands_receipt": payload,
-            "agent_config": {"system_prompt": openhands_system_prompt(config.repository_root)},
-        }
-    )
     import_metadata: dict[str, Any] | None = None
-    trajectory_exists = bool(receipt.log_dir and (Path(receipt.log_dir) / "trajectory").exists())
-    if receipt.status == "completed" or trajectory_exists:
+    trajectory_exists = bool(
+        projection_receipt.log_dir
+        and (Path(projection_receipt.log_dir) / "trajectory").exists()
+    )
+    if projection_receipt.status == "completed" or trajectory_exists:
         try:
-            if receipt.log_dir is None:
+            if len(live_projections) != 1:
+                raise RuntimeError("native executor did not return one final live trace projection")
+            if projection_receipt.log_dir is None:
                 raise RuntimeError("native receipt has no OpenHands log directory")
-            receipt_log_dir = Path(receipt.log_dir).expanduser().resolve()
+            receipt_log_dir = Path(projection_receipt.log_dir).expanduser().resolve()
             try:
-                receipt_log_dir.relative_to(config.log_dir)
+                receipt_log_dir.relative_to(config.log_dir.expanduser().resolve())
             except ValueError as exc:
                 raise RuntimeError("native receipt log directory escaped the configured log root") from exc
             workspace_submit = None
-            if receipt.agent_id:
-                run_name = f"{receipt.task_id.replace(':', '_')}-{receipt.agent_id}"
+            if projection_receipt.agent_id:
+                run_name = (
+                    f"{projection_receipt.task_id.replace(':', '_')}-"
+                    f"{projection_receipt.agent_id}"
+                )
                 workspace_submit = config.tmp_dir / run_name / "workspace" / "submit.sh"
             imported = import_openhands_trace(
-                receipt,
+                projection_receipt,
                 workspace_submit=workspace_submit,
                 redactions=(*runtime_secret_values(), *(value for value in (config.llm_api_key,) if value)),
             )
-            for projected in imported.steps:
-                run.record(projected.step)
-            import_metadata = imported.metadata
+            live_steps = live_projections[0]
+            live_metadata = build_trace_import_metadata(
+                live_steps,
+                status=(
+                    "completed"
+                    if projection_receipt.status == "completed"
+                    else "partial_error"
+                ),
+            )
+            if tuple(item.key for item in live_steps) != tuple(item.key for item in imported.steps):
+                raise RuntimeError("live and saved OpenHands projections disagree on step identities")
+            for digest_name in ("projected_steps_sha256", "projected_events_sha256"):
+                if live_metadata[digest_name] != imported.metadata.get(digest_name):
+                    raise RuntimeError(
+                        f"live and saved OpenHands projections disagree on {digest_name}"
+                    )
+            import_metadata = live_metadata
         except Exception as exc:
             diagnostic = f"{type(exc).__name__}: OpenHands trajectory import failed; inspect private rollout logs"
             import_metadata = {
@@ -723,13 +792,22 @@ async def _run_and_record(
                 "status": "error",
                 "error": diagnostic,
             }
-    elif receipt.status == "error":
+    elif projection_receipt.status == "error":
         import_metadata = {
             "schema_version": "1",
             "status": "unavailable_native_error",
             "error": "native rollout produced no saved OpenHands trajectory",
         }
-    run.trace.extra["openhands_trace_import"] = import_metadata
+    payload = receipt.model_dump(mode="json")
+    run.trace.content = receipt.model_dump_json()
+    run.trace.extra.update(
+        {
+            "runner": receipt.runner,
+            "native_openhands_receipt": payload,
+            "agent_config": {"system_prompt": openhands_system_prompt(config.repository_root)},
+            "openhands_trace_import": import_metadata,
+        }
+    )
     # A receipt is system infrastructure metadata, never an assistant turn.
     run.record(
         Step(
@@ -740,6 +818,15 @@ async def _run_and_record(
             },
         )
     )
+    try:
+        receipt_flushed = await asyncio.to_thread(flush_telemetry, 30.0)
+    except Exception:
+        receipt_flushed = False
+    if not receipt_flushed:
+        receipt = _telemetry_error_receipt(receipt)
+        payload = receipt.model_dump(mode="json")
+        run.trace.content = receipt.model_dump_json()
+        run.trace.extra["native_openhands_receipt"] = payload
     run.trace.stop_reason = "done"
     if receipt.status == "error" or not import_metadata or import_metadata.get("status") != "completed":
         run.trace.status = "error"

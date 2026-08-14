@@ -107,6 +107,7 @@ class OpenHandsEventTailer:
         self._emitted_step_counts: Counter[str] = Counter()
         self._final_event_count: int | None = None
         self._final_step_count: int | None = None
+        self._final_projection = True
 
     def start(self) -> None:
         """Start the single background poller."""
@@ -120,12 +121,13 @@ class OpenHandsEventTailer:
         )
         self._thread.start()
 
-    def finish(self, *, timeout: float = 10.0) -> None:
+    def finish(self, *, timeout: float = 10.0, final_projection: bool = True) -> None:
         """Stop live polling, reconcile the final store, and surface failures."""
 
         thread = self._thread
         if thread is None:
             raise RuntimeError("OpenHands event tailer was not started")
+        self._final_projection = final_projection
         self._stop.set()
         thread.join(timeout)
         if thread.is_alive():
@@ -176,7 +178,7 @@ class OpenHandsEventTailer:
         return tuple(
             self._projector.project(
                 events,
-                final=True,
+                final=self._final_projection,
                 **self._project_kwargs,
             )
         )
@@ -186,11 +188,11 @@ class OpenHandsEventTailer:
             while not self._stop.is_set():
                 self._reconcile(final=False)
                 self._stop.wait(self._poll_interval)
-            self._reconcile(final=True)
+            self._reconcile(final=True, projection_final=self._final_projection)
         except BaseException as exc:
             self._error = exc
 
-    def _reconcile(self, *, final: bool) -> None:
+    def _reconcile(self, *, final: bool, projection_final: bool | None = None) -> None:
         paths = self._event_paths(final=final)
         for origin, path in paths:
             try:
@@ -236,7 +238,7 @@ class OpenHandsEventTailer:
         projection = list(
             self._projector.project(
                 events,
-                final=final,
+                final=final if projection_final is None else projection_final,
                 **self._project_kwargs,
             )
         )

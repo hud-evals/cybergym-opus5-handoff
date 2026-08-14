@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -12,6 +14,7 @@ from mcp.types import TextContent
 
 from cybergym_hud.contract import OG_PROMPT
 from cybergym_hud.openhands_trace import (
+    REDACTION,
     DecodedOpenHandsEvent,
     OpenHandsEventProjector,
     TraceImportError,
@@ -177,6 +180,73 @@ def test_projects_user_messages_as_typed_text_content() -> None:
     assert projected[0].step.ended_at == projected[0].step.started_at
 
 
+def test_projects_text_only_agent_auto_user_then_tool_response_in_order() -> None:
+    auto_continue = (
+        "Please continue on whatever approach you think is suitable.\n"
+        "If you think you have solved the task, please finish the interaction.\n"
+        "IMPORTANT: YOU SHOULD NEVER ASK FOR HUMAN RESPONSE.\n"
+    )
+    events = [
+        {
+            "id": 0,
+            "timestamp": "2026-01-02T03:04:01Z",
+            "source": "agent",
+            "message": "I need to inspect one more detail.",
+            "action": "message",
+            "args": {
+                "content": "I need to inspect one more detail.",
+                "image_urls": None,
+                "wait_for_response": False,
+            },
+        },
+        {
+            "id": 1,
+            "timestamp": "2026-01-02T03:04:02Z",
+            "source": "user",
+            "message": auto_continue,
+            "action": "message",
+            "args": {
+                "content": auto_continue,
+                "image_urls": None,
+                "wait_for_response": False,
+            },
+        },
+        *_parallel_events(),
+    ]
+
+    projected = OpenHandsEventProjector().project(events, final=True)
+    assert [item.key for item in projected] == [
+        "agent-message:0",
+        "user:1",
+        "response:response-parallel",
+        "tool:call-one",
+        "tool:call-two",
+    ]
+    text_turn = projected[0].step
+    assert isinstance(text_turn, AgentStep)
+    assert text_turn.content == "I need to inspect one more detail."
+    assert text_turn.reasoning is None
+    assert text_turn.model is None
+    assert text_turn.usage is None
+    assert text_turn.done is False
+    assert projected[1].step.messages[0].content.text == auto_continue
+
+
+def test_unsupported_agent_action_without_metadata_fails_closed() -> None:
+    with pytest.raises(TraceImportError, match="metadata must be an object"):
+        OpenHandsEventProjector().decode(
+            {
+                "id": 1,
+                "timestamp": "2026-01-02T03:04:01Z",
+                "source": "agent",
+                "message": "unsupported",
+                "action": "run",
+                "args": {"command": "true"},
+            },
+            origin="fixture",
+        )
+
+
 def test_projects_sanitized_decoded_events_without_raw_redecode() -> None:
     projector = OpenHandsEventProjector()
     raw = _parallel_events()
@@ -216,6 +286,21 @@ def test_live_prefix_emits_agent_and_only_contiguous_tool_results() -> None:
         OpenHandsEventProjector().project(events[:3], final=True)
 
 
+def test_projected_start_times_are_strictly_in_semantic_order() -> None:
+    events = _parallel_events()
+    # Simulate parallel provider events whose source timestamps regress/tie.
+    events[1]["timestamp"] = events[0]["timestamp"]
+    events[2]["timestamp"] = "2026-01-02T03:04:01.000001"
+    events[3]["timestamp"] = "2026-01-02T03:04:00.000001"
+    projected = OpenHandsEventProjector().project(events, final=True)
+
+    starts = [
+        datetime.fromisoformat(item.step.started_at.replace("Z", "+00:00"))
+        for item in projected
+    ]
+    assert all(left < right for left, right in zip(starts, starts[1:], strict=False))
+
+
 def test_redacts_exact_values_sensitive_fields_and_secret_patterns_recursively() -> None:
     secret = "fixture-secret-value"  # noqa: S105
     projected = OpenHandsEventProjector(redactions=[secret]).project(
@@ -227,6 +312,73 @@ def test_redacts_exact_values_sensitive_fields_and_secret_patterns_recursively()
     assert "flag{fixture-not-a-real-flag}" not in encoded
     assert "sk-proj-abcdefghijklmnopqrstuvwxyz" not in encoded
     assert encoded.count("[REDACTED]") >= 5
+
+
+def test_redacts_generated_credentials_headers_jwts_and_argument_keys() -> None:
+    exact = "runtime-exact-secret-12345"  # noqa: S105
+    jwt = "eyJabcdefghijk.eyJabcdefghijk.abcdefghijk"
+    provider = "github_pat_abcdefghijklmnopqrstuvwxyz"
+    response = _response(
+        "response-credentials",
+        [
+            (
+                "call-credentials",
+                "execute_bash",
+                {
+                    "github_token": provider,
+                    "browser_cookie": "sess-abcdefghijklmnopqrstuvwxyz",
+                    "credentials": {exact: jwt},
+                    "note": "token budget and Basic analysis remain ordinary prose",
+                },
+            )
+        ],
+        reasoning=f"Authorization: Basic dXNlcjpwYXNzd29yZA== and Bearer {exact}",
+    )
+    events = [
+        {
+            "id": 0,
+            "timestamp": "2026-01-02T03:04:00Z",
+            "source": "user",
+            "message": "fixture",
+            "action": "message",
+            "args": {"content": f'\"OPENAI_API_KEY\": \"{exact}\"'},
+        },
+        _action(2, "run", response, "call-credentials"),
+        _observation(
+            3,
+            2,
+            "run",
+            response,
+            "call-credentials",
+            f"Cookie: session={exact}\nJWT={jwt}\nprovider={provider}",
+        ),
+        _finish(4, f"done with glpat-abcdefghijklmnop and {exact}"),
+    ]
+
+    projected = OpenHandsEventProjector(redactions=[exact]).project(events, final=True)
+    encoded = json.dumps([item.step.model_dump(mode="json") for item in projected])
+    for secret in (
+        exact,
+        jwt,
+        provider,
+        "sess-abcdefghijklmnopqrstuvwxyz",
+        "glpat-abcdefghijklmnop",
+    ):
+        assert secret not in encoded
+    assert "token budget and Basic analysis remain ordinary prose" in encoded
+
+
+def test_rejects_redacted_argument_key_collisions() -> None:
+    secret_key = "runtime-secret-key-name"  # noqa: S105
+    response = _response(
+        "response-key-collision",
+        [("call-collision", "execute_bash", {secret_key: "one", REDACTION: "two"})],
+    )
+    with pytest.raises(TraceImportError, match="collapsed distinct keys"):
+        OpenHandsEventProjector(redactions=[secret_key]).decode(
+            _action(2, "run", response, "call-collision"),
+            origin="fixture",
+        )
 
 
 def test_oversized_exported_fields_have_deterministic_digest_markers() -> None:
@@ -497,6 +649,24 @@ def test_error_receipt_preserves_validated_partial_transcript(tmp_path: Path) ->
 
 
 def test_remote_projection_gate_requires_visible_agent_tool_shape_and_receipt() -> None:
+    visible = [
+        {
+            "kind": "agent_message",
+            "text": None,
+            "reasoning": None,
+            "tool_calls": [
+                {"tool_call_id": "call-1", "name": "execute_bash", "arguments": {}}
+            ],
+        },
+        {
+            "kind": "tool_call",
+            "tool_name": "execute_bash",
+            "arguments": {},
+            "result_text": "ok",
+            "result_data": None,
+            "error": None,
+        },
+    ]
     receipt = {
         "schema_version": "1",
         "status": "completed",
@@ -506,15 +676,22 @@ def test_remote_projection_gate_requires_visible_agent_tool_shape_and_receipt() 
         "user_step_count": 0,
         "source_has_tool_actions": True,
         "projected_steps_sha256": "a" * 64,
+        "projected_events_sha256": hashlib.sha256(
+            json.dumps(
+                visible,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode()
+        ).hexdigest(),
     }
     events = [
-        {"kind": "agent_message", "text": None, "reasoning": None, "tool_calls": [{"id": "call-1"}]},
-        {"kind": "tool_call", "name": "execute_bash"},
+        *visible,
         {
             "kind": "raw",
             "attributes": {"hud.payload": {"extra": {"openhands_trace_import": receipt}}},
         },
     ]
     assert validate_remote_trace_projection(events) == receipt
-    with pytest.raises(TraceImportError, match="lost all source tool calls"):
+    with pytest.raises(TraceImportError, match="counts disagree"):
         validate_remote_trace_projection([events[0], events[2]])
