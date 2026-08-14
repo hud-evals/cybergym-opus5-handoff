@@ -847,13 +847,13 @@ def import_openhands_trace(
     agent_count = sum(isinstance(item.step, AgentStep) for item in steps)
     if agent_count < 1:
         raise TraceImportError("OpenHands trajectory has no model-visible assistant turn")
-    # A canonical max-iteration or rejected controller terminal is a normal,
-    # gradeable CyberGym endpoint even though CodeAct did not emit its
-    # provider ``finish`` tool.  Native controller-state validation decides
+    # A canonical max-iteration, stuck-loop, or rejected controller terminal
+    # is a normal, gradeable CyberGym endpoint even though CodeAct did not emit
+    # its provider ``finish`` tool. Native controller-state validation decides
     # whether that endpoint is gradeable; the trace importer must preserve the
-    # transcript instead of silently converting every bounded failure into
-    # infrastructure error.  ``has_final_agent_done`` below still distinguishes
-    # an explicit finish from a bounded controller terminal in the receipt.
+    # transcript instead of silently converting every bounded model outcome
+    # into infrastructure error. ``has_final_agent_done`` below still
+    # distinguishes an explicit finish from a controller terminal.
     metadata = build_trace_import_metadata(
         steps,
         status="completed" if receipt.status == "completed" else "partial_error",

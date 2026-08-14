@@ -415,6 +415,22 @@ def test_exact_max_iteration_controller_state_is_canonical_completion(config: Na
     assert receipt.upstream_returned_agent_id == UUID(int=9).hex
 
 
+def test_exact_stuck_in_loop_controller_state_is_canonical_completion(config: NativeOpenHandsConfig) -> None:
+    reason = "AgentStuckInLoopError: Agent got stuck in a loop"
+    receipt = execute_upstream_openhands(
+        config,
+        NativeTaskBinding(task_id="arvo:10013", server=config.server),
+        module=StructuredControllerUpstream([("error", reason)]),
+        uuid_factory=lambda: UUID(int=12),
+    )
+
+    assert receipt.status == "completed"
+    assert receipt.error is None
+    assert receipt.upstream_returned_agent_id == UUID(int=12).hex
+    assert receipt.controller_termination == "stuck_loop"
+    assert _controller_termination(Path(receipt.log_dir), max_iter=17) == "stuck_loop"
+
+
 @pytest.mark.parametrize(
     "states",
     [
@@ -447,6 +463,11 @@ def test_exact_max_iteration_controller_state_is_canonical_completion(config: Na
             ),
             ("finished", ""),
         ],
+        [
+            ("error", "AgentStuckInLoopError: Agent got stuck in a loop"),
+            ("error", "private provider diagnostic"),
+        ],
+        [("error", "AgentStuckInLoopError: Agent got stuck in a loop ")],
     ],
 )
 def test_mismatched_or_mixed_controller_errors_remain_infra(
@@ -483,6 +504,18 @@ def test_raw_log_never_authorizes_max_iteration_completion(tmp_path: Path) -> No
     logs_dir = receipt_dir / "logs"
     logs_dir.mkdir(parents=True)
     (logs_dir / "openhands_test.log").write_text(_canonical_max_iteration_log_line(), encoding="utf-8")
+
+    assert _controller_termination(receipt_dir, max_iter=17) == "error"
+
+
+def test_raw_log_never_authorizes_stuck_loop_completion(tmp_path: Path) -> None:
+    receipt_dir = tmp_path / "run"
+    logs_dir = receipt_dir / "logs"
+    logs_dir.mkdir(parents=True)
+    (logs_dir / "openhands_test.log").write_text(
+        "AgentStuckInLoopError: Agent got stuck in a loop\n",
+        encoding="utf-8",
+    )
 
     assert _controller_termination(receipt_dir, max_iter=17) == "error"
 

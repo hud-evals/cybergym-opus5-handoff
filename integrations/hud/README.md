@@ -117,9 +117,12 @@ Pinned OpenHands reports ordinary headless max-iteration exhaustion through
 its generic controller `error` state, while original CyberGym accepts the saved
 trajectory and still grades submitted PoCs. The adapter therefore treats only
 the exact terminal sentinel whose current and maximum iteration both equal the
-receipted `max_iter` as a completed, gradeable run. The append-only OpenHands
-event store is the sole terminal-state authority: structured `finished`,
-`rejected`, and that exact max-iteration sentinel are gradeable. Raw logs never
+receipted `max_iter` as a completed, gradeable run. Its exact structured
+`AgentStuckInLoopError: Agent got stuck in a loop` sentinel is likewise a
+model-loop endpoint that original CyberGym grades rather than retries. The
+append-only OpenHands event store is the sole terminal-state authority:
+structured `finished`, `rejected`, that exact max-iteration sentinel, and that
+exact pinned loop sentinel are gradeable. Raw logs never
 authorize completion because they also contain agent-controlled command output.
 Missing or malformed terminal events, provider errors, monetary budget
 sentinels (this profile configures no monetary budget), mismatched limits, and

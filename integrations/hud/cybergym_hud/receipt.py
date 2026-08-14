@@ -72,6 +72,7 @@ class NativeReceipt(BaseModel):
     agent_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
     upstream_returned_agent_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
     log_dir: str | None = None
+    controller_termination: Literal["finished", "rejected", "max_iterations", "stuck_loop"] | None = None
     error: str | None = None
 
     @model_validator(mode="after")

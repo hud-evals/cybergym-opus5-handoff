@@ -182,9 +182,18 @@ def load_upstream_openhands(root: Path) -> ModuleType:
     return module
 
 
-def _classify_error_reasons(reasons: list[str], *, max_iter: int) -> Literal["none", "max_iterations", "error"]:
+_STUCK_IN_LOOP_REASON = "AgentStuckInLoopError: Agent got stuck in a loop"
+
+
+def _classify_error_reasons(
+    reasons: list[str],
+    *,
+    max_iter: int,
+) -> Literal["none", "max_iterations", "stuck_loop", "error"]:
     if not reasons:
         return "none"
+    if all(reason == _STUCK_IN_LOOP_REASON for reason in reasons):
+        return "stuck_loop"
     for reason in reasons:
         match = _MAX_ITERATION_REASON.fullmatch(reason)
         if match is None:
@@ -203,16 +212,16 @@ def _controller_termination(
     receipt_log_dir: Path,
     *,
     max_iter: int,
-) -> Literal["finished", "rejected", "max_iterations", "error"]:
+) -> Literal["finished", "rejected", "max_iterations", "stuck_loop", "error"]:
     """Classify pinned OpenHands' zero-exit controller terminal state.
 
     OpenHands 0.33 represents normal headless iteration exhaustion as
     ``AgentState.ERROR``.  Original CyberGym nevertheless accepts any saved
-    trajectory and grades it.  Preserve that behavior only for the exact,
-    configured max-iteration sentinel; every other controller terminal state
-    remains a non-reportable infrastructure failure. The append-only event
-    store is the only authority: raw logs include agent-controlled command
-    output and therefore cannot authorize completion.
+    trajectory and grades it. Preserve that behavior for the exact configured
+    max-iteration sentinel and pinned loop-detector sentinel; every other
+    controller terminal state remains a non-reportable infrastructure failure.
+    The append-only event store is the only authority: raw logs include
+    agent-controlled command output and therefore cannot authorize completion.
     """
 
     events_root = receipt_log_dir / "file" / "sessions"
@@ -268,8 +277,10 @@ def _controller_termination(
     error_reasons = [reason for state, reason in terminal_states if state == "error"]
     if error_reasons:
         # An ERROR is terminal in this headless runner. Any mixture with a
-        # different terminal state is malformed, and any non-budget reason is
-        # provider/transport/controller infrastructure failure.
+        # different terminal state is malformed. Only the exact configured
+        # iteration limit and pinned model-loop detector are gradeable; all
+        # other reasons remain provider/transport/controller infrastructure
+        # failures.
         if len(error_reasons) != len(terminal_states):
             return "error"
         return _classify_error_reasons(error_reasons, max_iter=max_iter)
@@ -602,6 +613,7 @@ def execute_upstream_openhands(
         agent_id=agent_id,
         upstream_returned_agent_id=returned,
         log_dir=str(receipt_log_dir),
+        controller_termination=controller_termination,
     )
 
 
