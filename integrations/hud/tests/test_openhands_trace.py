@@ -294,10 +294,7 @@ def test_projected_start_times_are_strictly_in_semantic_order() -> None:
     events[3]["timestamp"] = "2026-01-02T03:04:00.000001"
     projected = OpenHandsEventProjector().project(events, final=True)
 
-    starts = [
-        datetime.fromisoformat(item.step.started_at.replace("Z", "+00:00"))
-        for item in projected
-    ]
+    starts = [datetime.fromisoformat(item.step.started_at.replace("Z", "+00:00")) for item in projected]
     assert all(left < right for left, right in zip(starts, starts[1:], strict=False))
 
 
@@ -341,7 +338,7 @@ def test_redacts_generated_credentials_headers_jwts_and_argument_keys() -> None:
             "source": "user",
             "message": "fixture",
             "action": "message",
-            "args": {"content": f'\"OPENAI_API_KEY\": \"{exact}\"'},
+            "args": {"content": f'"OPENAI_API_KEY": "{exact}"'},
         },
         _action(2, "run", response, "call-credentials"),
         _observation(
@@ -521,9 +518,7 @@ def test_posthoc_import_verifies_prompt_redacts_task_secrets_and_digests(tmp_pat
             )
         elif isinstance(step, ToolStep):
             assert step.call is not None and step.result is not None
-            result_text = "\n".join(
-                content.text for content in step.result.content if isinstance(content, TextContent)
-            )
+            result_text = "\n".join(content.text for content in step.result.content if isinstance(content, TextContent))
             remote_events.append(
                 {
                     "kind": "tool_call",
@@ -546,6 +541,62 @@ def test_posthoc_import_verifies_prompt_redacts_task_secrets_and_digests(tmp_pat
     corrupted[0]["text"] = "same counts, different assistant content"
     with pytest.raises(TraceImportError, match="conversation content disagrees"):
         validate_remote_trace_projection(corrupted)
+
+
+def test_completed_max_iteration_import_is_gradeable_without_finish(tmp_path: Path) -> None:
+    """A bounded CodeAct endpoint is completed even without the finish tool."""
+
+    agent_id = "c" * 32
+    checksum = "d" * 64
+    server = "http://127.0.0.1:8666"
+    (tmp_path / "args.json").write_text(
+        json.dumps(
+            {
+                "task": {
+                    "task_id": "arvo:10013",
+                    "agent_id": agent_id,
+                    "checksum": checksum,
+                    "server": server,
+                },
+                "agent_args": {"llm": {"api_key": None}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "trajectory").write_text(
+        json.dumps(
+            [
+                {
+                    "id": 0,
+                    "timestamp": "2026-01-02T03:04:00",
+                    "source": "user",
+                    "message": "fixture",
+                    "action": "message",
+                    "args": {"content": OG_PROMPT},
+                },
+                *_parallel_events(checksum),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    receipt = NativeReceipt(
+        status="completed",
+        task_id="arvo:10013",
+        server=server,
+        run_profile=_profile(),
+        agent_id=agent_id,
+        upstream_returned_agent_id=agent_id,
+        log_dir=str(tmp_path),
+    )
+
+    imported = import_openhands_trace(receipt)
+
+    assert imported.metadata["status"] == "completed"
+    assert imported.metadata["agent_step_count"] == 1
+    assert imported.metadata["tool_step_count"] == 2
+    assert imported.metadata["has_final_agent_done"] is False
+    encoded = json.dumps([item.step.model_dump(mode="json") for item in imported.steps])
+    assert all(value not in encoded for value in (agent_id, checksum, server))
 
 
 def test_projector_output_builds_timestamp_complete_1_14_22_backfill_plan(tmp_path: Path) -> None:
@@ -654,9 +705,7 @@ def test_remote_projection_gate_requires_visible_agent_tool_shape_and_receipt() 
             "kind": "agent_message",
             "text": None,
             "reasoning": None,
-            "tool_calls": [
-                {"tool_call_id": "call-1", "name": "execute_bash", "arguments": {}}
-            ],
+            "tool_calls": [{"tool_call_id": "call-1", "name": "execute_bash", "arguments": {}}],
         },
         {
             "kind": "tool_call",

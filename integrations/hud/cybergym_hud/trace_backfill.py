@@ -279,9 +279,7 @@ class StepRedactor:
         try:
             rebuilt = _step_from_wire_payload(sanitized)
         except Exception as exc:
-            raise TraceBackfillError(
-                f"redaction made {type(step).__name__} invalid ({type(exc).__name__})"
-            ) from None
+            raise TraceBackfillError(f"redaction made {type(step).__name__} invalid ({type(exc).__name__})") from None
         return cast("Step", rebuilt), report
 
     def _value(self, value: Any, report: RedactionReport, *, key: str | None = None) -> Any:
@@ -314,10 +312,7 @@ class StepRedactor:
             rendered, count = pattern.subn(replacement, rendered)
             report.record(category, count)
         rendered, count = _QUOTED_ASSIGNMENT.subn(
-            lambda match: (
-                f"{match.group('prefix')}{match.group('quote')}"
-                f"[REDACTED:assignment]{match.group('quote')}"
-            ),
+            lambda match: f"{match.group('prefix')}{match.group('quote')}[REDACTED:assignment]{match.group('quote')}",
             rendered,
         )
         report.record("assignment", count)
@@ -847,9 +842,7 @@ def _fetch_remote_snapshot(transport: BackfillTransport, plan: BackfillPlan) -> 
     remote_order = tuple(
         cast("str", event["id"])
         for event in events
-        if isinstance(event, dict)
-        and isinstance(event.get("id"), str)
-        and event.get("id") in expectation_by_id
+        if isinstance(event, dict) and isinstance(event.get("id"), str) and event.get("id") in expectation_by_id
     )
     expected_present_order = tuple(span_id for span_id in plan.span_ids if span_id in present)
     is_prefix = expected_present_order == plan.span_ids[: len(expected_present_order)]
@@ -918,9 +911,7 @@ def _require_complete_snapshot(snapshot: _RemoteSnapshot, plan: BackfillPlan) ->
     expected = Counter(expectation.kind for expectation in plan.expectations)
     observed = Counter(snapshot.planned_counts)
     if observed != expected:
-        raise TraceBackfillError(
-            "remote deterministic event counts do not match the local agent/tool/user plan"
-        )
+        raise TraceBackfillError("remote deterministic event counts do not match the local agent/tool/user plan")
 
 
 def _apply_summary(
@@ -997,9 +988,7 @@ def _whitelist_step(step: Step) -> Step:
                 raise TraceBackfillError("user text content contains annotations or unknown metadata")
             if not content.text.strip():
                 raise TraceBackfillError("mapper produced a blank HUD user message")
-            messages.append(
-                PromptMessage(role="user", content=TextContent(type="text", text=content.text))
-            )
+            messages.append(PromptMessage(role="user", content=TextContent(type="text", text=content.text)))
         return Step(
             source="user",
             messages=messages,
@@ -1016,9 +1005,7 @@ def _whitelist_step(step: Step) -> Step:
             or step.refusal is not None
             or step.citations
         ):
-            raise TraceBackfillError(
-                "agent mapper step contains forbidden messages, raw/sample, refusal, or citations"
-            )
+            raise TraceBackfillError("agent mapper step contains forbidden messages, raw/sample, refusal, or citations")
         calls = [_whitelist_call(call, label="agent tool call") for call in step.tool_calls]
         usage = _whitelist_usage(step.usage)
         return AgentStep(
@@ -1138,15 +1125,12 @@ def _wire_payload(step: Step) -> dict[str, Any]:
                 "content": step.content,
                 "reasoning": step.reasoning,
                 "tool_calls": [
-                    {"id": call.id, "name": call.name, "arguments": call.arguments}
-                    for call in step.tool_calls
+                    {"id": call.id, "name": call.name, "arguments": call.arguments} for call in step.tool_calls
                 ],
                 "done": step.done,
                 "finish_reason": step.finish_reason,
                 "model": step.model,
-                "usage": (
-                    step.usage.model_dump(mode="json", exclude_none=True) if step.usage is not None else None
-                ),
+                "usage": (step.usage.model_dump(mode="json", exclude_none=True) if step.usage is not None else None),
             }
         )
         return {key: value for key, value in common.items() if value is not None}
@@ -1508,9 +1492,7 @@ def _assert_expected_counts(plan: BackfillPlan, args: argparse.Namespace) -> Non
 def _assert_apply_count_gate(args: argparse.Namespace) -> None:
     values = (args.expect_user, args.expect_agent, args.expect_tool)
     if args.apply and any(value is None for value in values):
-        raise TraceBackfillError(
-            "--apply requires --expect-user, --expect-agent, and --expect-tool"
-        )
+        raise TraceBackfillError("--apply requires --expect-user, --expect-agent, and --expect-tool")
     if any(value is not None and value < 0 for value in values):
         raise TraceBackfillError("operator expected event counts may not be negative")
 

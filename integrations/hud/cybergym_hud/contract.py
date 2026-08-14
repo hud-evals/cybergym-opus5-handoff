@@ -119,9 +119,10 @@ def validate_contract(
         raise ValueError("native runner must delegate to upstream run_with_configs")
     if scaffold["task_generation"] != "exact_run_with_configs_without_mask_map_path":
         raise ValueError("native profile must preserve the example's unmasked generation")
-    if scaffold["system_prompt_source"] != (
-        "openhands-repo/openhands/agenthub/codeact_agent/prompts/system_prompt.j2"
-    ) or scaffold["system_prompt_sha256"] != PINNED_CODEACT_SYSTEM_PROMPT_SHA256:
+    if (
+        scaffold["system_prompt_source"] != ("openhands-repo/openhands/agenthub/codeact_agent/prompts/system_prompt.j2")
+        or scaffold["system_prompt_sha256"] != PINNED_CODEACT_SYSTEM_PROMPT_SHA256
+    ):
         raise ValueError("OpenHands CodeAct system prompt identity drifted")
     if scaffold["user_prompt_template"] != "empty":
         raise ValueError("OpenHands CodeAct user prompt template drifted")

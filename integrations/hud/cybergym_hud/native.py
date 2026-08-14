@@ -378,9 +378,7 @@ def _make_openhands_trace_tailer(
 
     return OpenHandsEventTailer(
         receipt_log_dir,
-        projector=OpenHandsEventProjector(
-            redactions=_trace_redactions(config, exact=exact_redactions)
-        ),
+        projector=OpenHandsEventProjector(redactions=_trace_redactions(config, exact=exact_redactions)),
         sink=config.trace_step_sink,
         project_kwargs={
             "origin": "event_store",
@@ -741,10 +739,7 @@ async def _run_and_record(
         receipt = _telemetry_error_receipt(receipt)
 
     import_metadata: dict[str, Any] | None = None
-    trajectory_exists = bool(
-        projection_receipt.log_dir
-        and (Path(projection_receipt.log_dir) / "trajectory").exists()
-    )
+    trajectory_exists = bool(projection_receipt.log_dir and (Path(projection_receipt.log_dir) / "trajectory").exists())
     if projection_receipt.status == "completed" or trajectory_exists or live_projections:
         try:
             if len(live_projections) != 1:
@@ -759,20 +754,13 @@ async def _run_and_record(
             live_steps = live_projections[0]
             live_metadata = build_trace_import_metadata(
                 live_steps,
-                status=(
-                    "completed"
-                    if projection_receipt.status == "completed"
-                    else "partial_error"
-                ),
+                status=("completed" if projection_receipt.status == "completed" else "partial_error"),
             )
             live_metadata["saved_trajectory_reconciled"] = trajectory_exists
             if trajectory_exists:
                 workspace_submit = None
                 if projection_receipt.agent_id:
-                    run_name = (
-                        f"{projection_receipt.task_id.replace(':', '_')}-"
-                        f"{projection_receipt.agent_id}"
-                    )
+                    run_name = f"{projection_receipt.task_id.replace(':', '_')}-{projection_receipt.agent_id}"
                     workspace_submit = config.tmp_dir / run_name / "workspace" / "submit.sh"
                 imported = import_openhands_trace(
                     projection_receipt,
@@ -786,9 +774,7 @@ async def _run_and_record(
                     raise RuntimeError("live and saved OpenHands projections disagree on step identities")
                 for digest_name in ("projected_steps_sha256", "projected_events_sha256"):
                     if live_metadata[digest_name] != imported.metadata.get(digest_name):
-                        raise RuntimeError(
-                            f"live and saved OpenHands projections disagree on {digest_name}"
-                        )
+                        raise RuntimeError(f"live and saved OpenHands projections disagree on {digest_name}")
             import_metadata = live_metadata
         except Exception as exc:
             diagnostic = f"{type(exc).__name__}: OpenHands trajectory import failed; inspect private rollout logs"

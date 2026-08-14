@@ -170,11 +170,7 @@ class OpenHandsEventTailer:
 
         if self._final_step_count is None:
             raise OpenHandsTraceError("OpenHands event tailer has not finalized")
-        events = [
-            stored.event
-            for origin in sorted(self._events)
-            if (stored := self._events[origin]).event is not None
-        ]
+        events = [stored.event for origin in sorted(self._events) if (stored := self._events[origin]).event is not None]
         return tuple(
             self._projector.project(
                 events,
@@ -207,9 +203,7 @@ class OpenHandsEventTailer:
             stored = self._events.get(origin)
             if stored is not None:
                 if stored.digest != digest:
-                    raise OpenHandsTraceError(
-                        f"OpenHands rewrote append-only event {origin.session}/{origin.event_id}"
-                    )
+                    raise OpenHandsTraceError(f"OpenHands rewrote append-only event {origin.session}/{origin.event_id}")
                 continue
 
             if not final and self._candidates.get(origin) != digest:
@@ -265,9 +259,7 @@ class OpenHandsEventTailer:
                 ) from exc
             return _RETRY
         if not isinstance(raw, dict):
-            raise OpenHandsTraceError(
-                f"OpenHands event {origin.session}/{origin.event_id} is not an object"
-            )
+            raise OpenHandsTraceError(f"OpenHands event {origin.session}/{origin.event_id} is not an object")
         return self._projector.decode(raw, origin=_render_origin(origin))
 
     def _emit_new_suffix(self, projection: list[object]) -> None:
@@ -294,9 +286,7 @@ class OpenHandsEventTailer:
         ):
             rendered = _step_fingerprint(step)
             if self._emitted_payloads[key] != rendered:
-                raise OpenHandsTraceError(
-                    f"OpenHands projection changed already-emitted step {key}"
-                )
+                raise OpenHandsTraceError(f"OpenHands projection changed already-emitted step {key}")
 
         for key, step in zip(
             keys[len(self._emitted_keys) :],
@@ -434,9 +424,7 @@ def _render_origin(origin: _EventOrigin) -> str:
 
 def _step_fingerprint(step: Step) -> str:
     payload = step.model_dump(mode="json", exclude_none=True)
-    return hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 __all__ = [

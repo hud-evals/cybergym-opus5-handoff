@@ -455,11 +455,7 @@ class OpenHandsEventProjector:
         decoded_inputs = [isinstance(event, DecodedOpenHandsEvent) for event in event_list]
         if any(decoded_inputs) and not all(decoded_inputs):
             raise TraceImportError(f"{origin} mixes raw and decoded OpenHands events")
-        decoded = (
-            event_list
-            if all(decoded_inputs)
-            else [self.decode(raw, origin=origin) for raw in event_list]
-        )
+        decoded = event_list if all(decoded_inputs) else [self.decode(raw, origin=origin) for raw in event_list]
         seen_event_ids: set[str] = set()
         for event in decoded:
             if event.event_id in seen_event_ids:
@@ -528,10 +524,14 @@ class OpenHandsEventProjector:
 
             reasoning_parts = [event.reasoning for event in actions if event.reasoning]
             reasoning = "\n\n".join(dict.fromkeys(reasoning_parts)) or None
-            agent_calls = [] if is_finish else [
-                MCPToolCall(id=call.id, name=call.name, provider_name=call.name, arguments=call.arguments)
-                for call in exemplar.calls
-            ]
+            agent_calls = (
+                []
+                if is_finish
+                else [
+                    MCPToolCall(id=call.id, name=call.name, provider_name=call.name, arguments=call.arguments)
+                    for call in exemplar.calls
+                ]
+            )
             response_steps: list[ProjectedStep] = []
             response_steps.append(
                 ProjectedStep(
@@ -724,9 +724,7 @@ def _projected_event_view(item: ProjectedStep) -> dict[str, Any]:
             "arguments": step.call.arguments or {},
             "result_text": None if is_error else result_text,
             "result_data": result_data,
-            "error": (step.error or result_text or "tool error (no message)")
-            if is_error or step.error
-            else None,
+            "error": (step.error or result_text or "tool error (no message)") if is_error or step.error else None,
         }
     raise TraceImportError(f"projected step {item.key} has no control-plane-visible representation")
 
@@ -795,9 +793,7 @@ def build_trace_import_metadata(
         "agent_step_count": agent_count,
         "tool_step_count": tool_count,
         "user_step_count": user_count,
-        "has_final_agent_done": any(
-            isinstance(item.step, AgentStep) and item.step.done for item in steps
-        ),
+        "has_final_agent_done": any(isinstance(item.step, AgentStep) and item.step.done for item in steps),
         "source_has_tool_actions": tool_count > 0,
         "projected_steps_sha256": _canonical_sha256(canonical_steps),
         "projected_events_sha256": _canonical_sha256(visible_events),
@@ -833,9 +829,7 @@ def import_openhands_trace(
     if isinstance(llm, Mapping):
         task_secrets.extend(value for key, value in llm.items() if _RUNTIME_SECRET_NAME.search(str(key)))
     all_redactions = [
-        value
-        for value in (*task_secrets, *_submit_secrets(workspace_submit), *redactions)
-        if isinstance(value, str)
+        value for value in (*task_secrets, *_submit_secrets(workspace_submit), *redactions) if isinstance(value, str)
     ]
     raw_events = _read_regular_json(log_dir / "trajectory", label="OpenHands trajectory")
     if not isinstance(raw_events, list) or not raw_events:
@@ -852,10 +846,13 @@ def import_openhands_trace(
     agent_count = sum(isinstance(item.step, AgentStep) for item in steps)
     if agent_count < 1:
         raise TraceImportError("OpenHands trajectory has no model-visible assistant turn")
-    if receipt.status == "completed" and not any(
-        isinstance(item.step, AgentStep) and item.step.done for item in steps
-    ):
-        raise TraceImportError("completed OpenHands trajectory has no final assistant turn")
+    # A canonical max-iteration or rejected controller terminal is a normal,
+    # gradeable CyberGym endpoint even though CodeAct did not emit its
+    # provider ``finish`` tool.  Native controller-state validation decides
+    # whether that endpoint is gradeable; the trace importer must preserve the
+    # transcript instead of silently converting every bounded failure into
+    # infrastructure error.  ``has_final_agent_done`` below still distinguishes
+    # an explicit finish from a bounded controller terminal in the receipt.
     metadata = build_trace_import_metadata(
         steps,
         status="completed" if receipt.status == "completed" else "partial_error",
@@ -917,8 +914,7 @@ def validate_remote_trace_projection(events: Sequence[Mapping[str, Any]]) -> dic
     remote_tools = [event for event in events if event.get("kind") == "tool_call"]
     remote_users = [event for event in events if event.get("kind") == "user_message"] if user_count else []
     if not remote_agents or any(
-        not (event.get("text") or event.get("reasoning") or event.get("tool_calls"))
-        for event in remote_agents
+        not (event.get("text") or event.get("reasoning") or event.get("tool_calls")) for event in remote_agents
     ):
         raise TraceImportError("remote HUD trace has no complete model-visible assistant transcript")
     if (
@@ -930,11 +926,7 @@ def validate_remote_trace_projection(events: Sequence[Mapping[str, Any]]) -> dic
         raise TraceImportError("remote HUD trajectory import counts disagree with projected events")
     if receipt.get("source_has_tool_actions") and not remote_tools:
         raise TraceImportError("remote HUD trace lost all source tool calls")
-    imported_kinds = (
-        {"user_message", "agent_message", "tool_call"}
-        if user_count
-        else {"agent_message", "tool_call"}
-    )
+    imported_kinds = {"user_message", "agent_message", "tool_call"} if user_count else {"agent_message", "tool_call"}
     imported_events = [event for event in events if event.get("kind") in imported_kinds]
     if _canonical_sha256([_remote_event_view(event) for event in imported_events]) != visible_digest:
         raise TraceImportError("remote HUD conversation content disagrees with import receipt")
