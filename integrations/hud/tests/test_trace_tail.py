@@ -292,6 +292,28 @@ def test_incomplete_final_event_fails_closed(tmp_path: Path) -> None:
         tailer.finish()
 
 
+def test_configured_event_size_limit_still_fails_closed(tmp_path: Path) -> None:
+    events_dir = _event_dir(tmp_path)
+    _write_event(
+        events_dir / "0.json",
+        kind="agent",
+        key="response:one",
+        text="fixture payload larger than the configured cap",
+        ready=True,
+    )
+    tailer = OpenHandsEventTailer(
+        tmp_path,
+        projector=FakeProjector(),
+        sink=lambda _step: None,
+        poll_interval=0.01,
+        max_event_bytes=32,
+    )
+    tailer.start()
+
+    with pytest.raises(OpenHandsTraceError, match="projection failed"):
+        tailer.finish()
+
+
 @pytest.mark.skipif(not hasattr(os, "symlink"), reason="platform has no symlink support")
 def test_symlinked_event_file_fails_closed(tmp_path: Path) -> None:
     events_dir = _event_dir(tmp_path)

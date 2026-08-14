@@ -675,6 +675,59 @@ def test_live_tailer_and_posthoc_import_match_across_condensation(tmp_path: Path
     assert tailer.final_step_count == len(imported.steps) == 4
 
 
+def test_live_tailer_accepts_pinned_browser_event_larger_than_16_mib_and_discards_extras(
+    tmp_path: Path,
+) -> None:
+    response = _response(
+        "response-large-browser-observation",
+        [("call-browser", "browser", {"action": "fixture"})],
+    )
+    events = [
+        {
+            "id": 0,
+            "timestamp": "2026-01-02T03:04:00.000001",
+            "source": "user",
+            "message": "fixture",
+            "action": "message",
+            "args": {"content": OG_PROMPT},
+        },
+        _action(1, "browse", response, "call-browser"),
+        _observation(2, 1, "browse", response, "call-browser", "fixture browser result"),
+    ]
+    # Pinned BrowserOutputObservation persists full DOM/a11y objects and
+    # screenshots in ``extras``.  They are not model-visible transcript data,
+    # but they can make one otherwise valid event substantially larger than
+    # the historical 16 MiB transport ceiling.
+    events[2]["extras"] = {
+        "axtree_object": {"tree": "x" * (16 * 1024 * 1024)},
+        "dom_object": {},
+        "screenshot": "fixture-image",
+    }
+    events_dir = tmp_path / "file" / "sessions" / "fixture-session" / "events"
+    events_dir.mkdir(parents=True)
+    for event in events:
+        (events_dir / f"{event['id']}.json").write_text(json.dumps(event), encoding="utf-8")
+    assert (events_dir / "2.json").stat().st_size > 16 * 1024 * 1024
+
+    emitted = []
+    tailer = OpenHandsEventTailer(
+        tmp_path,
+        projector=OpenHandsEventProjector(),
+        sink=emitted.append,
+        poll_interval=0.01,
+        project_kwargs={"skip_initial_user_prompt": OG_PROMPT},
+    )
+    tailer.start()
+    tailer.finish()
+
+    assert tailer.final_event_count == 3
+    assert tailer.final_step_count == len(emitted) == 2
+    encoded = json.dumps([step.model_dump(mode="json") for step in emitted])
+    assert "fixture browser result" in encoded
+    assert "fixture-image" not in encoded
+    assert len(encoded) < 10_000
+
+
 def test_posthoc_import_verifies_prompt_redacts_task_secrets_and_digests(tmp_path: Path) -> None:
     agent_id = "a" * 32
     checksum = "b" * 64

@@ -23,7 +23,12 @@ from typing import Protocol
 from hud.types import Step
 
 _EVENT_FILE = re.compile(r"^(?P<event_id>[0-9]+)\.json$")
-_DEFAULT_MAX_EVENT_BYTES = 16 * 1024 * 1024
+# Pinned BrowserOutputObservation event files can legitimately include the
+# complete DOM/accessibility tree plus screenshots even though the semantic
+# projector discards those fields.  Keep the transport bounded, but align its
+# ceiling with the post-hoc trajectory importer so live projection can reach
+# the strict decoder for those events.
+_DEFAULT_MAX_EVENT_BYTES = 128 * 1024 * 1024
 
 
 class OpenHandsTraceError(RuntimeError):
