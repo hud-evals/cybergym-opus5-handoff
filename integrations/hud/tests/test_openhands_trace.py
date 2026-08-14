@@ -342,7 +342,33 @@ def test_pinned_error_observation_is_a_failed_result_for_its_causal_tool_call() 
     assert tool_step.call.name == "execute_bash"
     assert tool_step.result is not None
     assert tool_step.result.isError is True
-    assert tool_step.result.content[0].text == "fixture recoverable tool error"
+    assert tool_step.result.content[0].text == (
+        "fixture recoverable tool error\n[Error occurred in processing last action]"
+    )
+
+
+def test_error_observation_uses_pinned_model_visible_middle_truncation() -> None:
+    response = _response(
+        "response-long-recoverable-error",
+        [("call-error", "execute_bash", {"command": "fixture-command"})],
+    )
+    content = "a" * 15_001 + "middle" + "z" * 15_001
+    observation = _error_observation(3, 2, response, "call-error")
+    observation["content"] = content
+    projected = OpenHandsEventProjector().project(
+        [_action(2, "run", response, "call-error"), observation],
+        final=True,
+    )
+
+    tool_step = projected[1].step
+    assert isinstance(tool_step, ToolStep)
+    assert tool_step.result is not None
+    assert tool_step.result.content[0].text == (
+        "a" * 15_000
+        + "\n[... Observation truncated due to length ...]\n"
+        + "z" * 15_000
+        + "\n[Error occurred in processing last action]"
+    )
 
 
 def test_error_observation_requires_the_exact_causal_action() -> None:

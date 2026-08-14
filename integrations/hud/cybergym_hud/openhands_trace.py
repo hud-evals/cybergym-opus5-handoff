@@ -90,6 +90,9 @@ _CONDENSATION_ARGS = frozenset(
         "summary_offset",
     }
 )
+_OPENHANDS_MAX_MESSAGE_CHARS = 30_000
+_OPENHANDS_OBSERVATION_TRUNCATION_MARKER = "\n[... Observation truncated due to length ...]\n"
+_OPENHANDS_ERROR_OBSERVATION_SUFFIX = "\n[Error occurred in processing last action]"
 
 
 class TraceImportError(RuntimeError):
@@ -239,6 +242,15 @@ def _event_index(value: object, *, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise TraceImportError(f"{label} must be a nonnegative integer")
     return value
+
+
+def _model_visible_error_observation(content: str) -> str:
+    """Reproduce pinned ConversationMemory's ErrorObservation formatting."""
+
+    if len(content) > _OPENHANDS_MAX_MESSAGE_CHARS:
+        half = _OPENHANDS_MAX_MESSAGE_CHARS // 2
+        content = content[:half] + _OPENHANDS_OBSERVATION_TRUNCATION_MARKER + content[-half:]
+    return content + _OPENHANDS_ERROR_OBSERVATION_SUFFIX
 
 
 def _validate_condensation_action(
@@ -501,6 +513,7 @@ class OpenHandsEventProjector:
                 error_id = extras.get("error_id", "")
                 if not isinstance(error_id, str):
                     raise TraceImportError(f"{origin} error observation {event_id} error id is not text")
+                content = _model_visible_error_observation(content)
             return DecodedOpenHandsEvent(
                 event_id=event_id,
                 timestamp=timestamp,
