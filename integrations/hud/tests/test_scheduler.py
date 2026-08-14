@@ -40,7 +40,7 @@ from cybergym_hud.tasks import make_task
 from cybergym_hud.taskset import task_ids
 
 
-def _remote_projected_events() -> list[dict[str, object]]:
+def _remote_projected_events(*, grader_error: bool = False) -> list[dict[str, object]]:
     projected = ProjectedStep(
         "response:fixture",
         AgentStep(content="finished", done=True),
@@ -55,6 +55,11 @@ def _remote_projected_events() -> list[dict[str, object]]:
                     status="completed",
                 )
             },
+        },
+        {
+            "kind": "scenario_evaluate",
+            "error": None if not grader_error else "grader failure",
+            "result": {"done": True, "isError": grader_error, "score": 0.0},
         },
     ]
 
@@ -547,7 +552,6 @@ async def test_remote_hud_receipt_paginates_full_catalog(
                         "id": str(UUID(value)),
                         "status": "completed",
                         "reward": 0.0,
-                        "evaluation_result": {"isError": False},
                     }
                     for value in trace_ids[start:stop]
                 ]
@@ -572,14 +576,13 @@ async def test_remote_hud_receipt_rejects_completed_grader_error(
     class Client:
         async def aget(self, path: str, *, params=None):
             if path.endswith("/events"):
-                return {"events": _remote_projected_events()}
+                return {"events": _remote_projected_events(grader_error=True)}
             return {
                 "items": [
                     {
                         "id": str(UUID(trace_id)),
                         "status": "completed",
                         "reward": 0.0,
-                        "metadata": {"evaluation_result": {"isError": True}},
                     }
                 ]
             }
@@ -589,5 +592,5 @@ async def test_remote_hud_receipt_rejects_completed_grader_error(
 
     monkeypatch.setattr("cybergym_hud.scheduler.PlatformClient.from_settings", lambda: Client())
     monkeypatch.setattr("cybergym_hud.scheduler.asyncio.sleep", no_sleep)
-    with pytest.raises(RuntimeError, match="nonterminal"):
+    with pytest.raises(RuntimeError, match="grader reported an evaluation error"):
         await require_remote_hud_receipt("job-error", (trace_id,))

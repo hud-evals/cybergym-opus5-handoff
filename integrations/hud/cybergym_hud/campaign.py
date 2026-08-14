@@ -28,7 +28,11 @@ from .native import (
     NativeOpenHandsConfig,
     execute_upstream_openhands,
 )
-from .openhands_trace import TraceImportError, validate_remote_trace_projection
+from .openhands_trace import (
+    TraceImportError,
+    validate_remote_evaluation_receipt,
+    validate_remote_trace_projection,
+)
 from .receipt import NativeReceipt, NativeTaskBinding
 from .scheduler import run_many, verify_and_persist_remote_receipt, write_summary
 from .taskset import make_taskset
@@ -73,21 +77,6 @@ def _uuid_key(value: object) -> str:
         return UUID(rendered).hex
     except ValueError:
         return rendered
-
-
-def _remote_evaluation_is_error(row: dict[str, Any]) -> bool:
-    """Fail closed unless the remote grader frame explicitly reports success."""
-
-    evaluation = row.get("evaluation_result")
-    if evaluation is None:
-        metadata = row.get("metadata")
-        evaluation = metadata.get("evaluation_result") if isinstance(metadata, dict) else None
-    if not isinstance(evaluation, dict):
-        return True
-    marker = evaluation.get("isError")
-    if marker is None:
-        marker = evaluation.get("is_error")
-    return marker is not False
 
 
 def _campaign_identity(
@@ -517,33 +506,38 @@ async def require_remote_job_receipt(job: Job, *, client: PlatformClient | None 
 
 
 async def require_remote_trace_events(
-    trace_ids: Iterable[str],
+    trace_rows: Iterable[dict[str, Any]],
     *,
     client: PlatformClient | None = None,
-) -> None:
+) -> set[str]:
     """Require telemetry events for an already-validated subset of job rows."""
 
     client = client or PlatformClient.from_settings()
     missing: list[str] = []
-    for trace_id in trace_ids:
+    grader_errors: set[str] = set()
+    for row in trace_rows:
+        trace_id = str(row["id"])
         observed = False
         last_problem = "no events"
-        for attempt in range(3):
+        for attempt in range(31):
             data = await client.aget(f"/trace/{trace_id}/events")
             events = data.get("events", []) if isinstance(data, dict) else []
             if isinstance(events, list):
                 try:
                     validate_remote_trace_projection(events)
+                    if validate_remote_evaluation_receipt(events, expected_reward=row.get("reward")):
+                        grader_errors.add(_uuid_key(trace_id))
                     observed = True
                     break
                 except TraceImportError as exc:
                     last_problem = str(exc)
-            if attempt < 2:
-                await asyncio.sleep(1.0)
+            if attempt < 30:
+                await asyncio.sleep(2.0)
         if not observed:
             missing.append(f"{trace_id} ({last_problem})")
     if missing:
         raise CampaignBlocked("HUD terminal receipts lack remotely readable telemetry events: " + ", ".join(missing))
+    return grader_errors
 
 
 async def require_remote_trace_enter(
@@ -617,11 +611,7 @@ async def reconcile_running_attempt(
         # A task with no remote row and no durable launch marker never reached
         # execute_upstream_openhands and is safe to place in a later attempt.
 
-    if terminal_rows:
-        await require_remote_trace_events(
-            (str(row["id"]) for row in terminal_rows),
-            client=client,
-        )
+    grader_error_ids = await require_remote_trace_events(terminal_rows, client=client) if terminal_rows else set()
     if unresolved:
         state.record_unresolved(shard_index, attempt["number"], unresolved)
         raise CampaignBlocked(
@@ -650,7 +640,7 @@ async def reconcile_running_attempt(
     )
     write_summary(summary_path, recovered)
     has_errors = any(
-        row.get("status") in {"error", "cancelled"} or _remote_evaluation_is_error(row) for row in terminal_rows
+        row.get("status") in {"error", "cancelled"} or _uuid_key(row["id"]) in grader_error_ids for row in terminal_rows
     )
     state.complete_attempt(
         shard_index,

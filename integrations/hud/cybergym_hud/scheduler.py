@@ -22,7 +22,11 @@ from .cleanup import cleanup_tracked_root
 from .contract import validate_contract
 from .env import build_env
 from .native import NativeOpenHandsAgent, NativeOpenHandsBatchAgent, NativeOpenHandsConfig
-from .openhands_trace import TraceImportError, validate_remote_trace_projection
+from .openhands_trace import (
+    TraceImportError,
+    validate_remote_evaluation_receipt,
+    validate_remote_trace_projection,
+)
 from .receipt import NativeReceipt, NativeTaskBinding
 from .taskset import make_taskset
 from .taskset import task_ids as catalog_task_ids
@@ -59,19 +63,6 @@ def _trace_key(value: object) -> str:
         return rendered
 
 
-def _remote_evaluation_succeeded(row: dict[str, Any]) -> bool:
-    evaluation = row.get("evaluation_result")
-    if evaluation is None:
-        metadata = row.get("metadata")
-        evaluation = metadata.get("evaluation_result") if isinstance(metadata, dict) else None
-    if not isinstance(evaluation, dict):
-        return False
-    marker = evaluation.get("isError")
-    if marker is None:
-        marker = evaluation.get("is_error")
-    return marker is False
-
-
 async def require_remote_hud_receipt(job_id: str, trace_ids: tuple[str, ...]) -> tuple[str, ...]:
     """Fail closed unless HUD exposes terminal, rewarded rows and events."""
 
@@ -79,7 +70,9 @@ async def require_remote_hud_receipt(job_id: str, trace_ids: tuple[str, ...]) ->
     client = PlatformClient.from_settings()
     remote: dict[str, tuple[str, dict[str, Any]]] = {}
     terminal: set[str] = set()
-    for attempt in range(3):
+    attempts = 31
+    poll_seconds = 2.0
+    for attempt in range(attempts):
         rows: list[Any] = []
         # HUD caps this endpoint at 1,000 rows. The complete CyberGym catalog
         # has 1,507 traces, so fetch pages instead of discovering this only
@@ -101,14 +94,12 @@ async def require_remote_hud_receipt(job_id: str, trace_ids: tuple[str, ...]) ->
         terminal = {
             trace_id
             for trace_id, (_remote_id, row) in remote.items()
-            if row.get("status") in {"completed", "error", "cancelled"}
-            and row.get("reward") is not None
-            and _remote_evaluation_succeeded(row)
+            if row.get("status") in {"completed", "error", "cancelled"} and row.get("reward") is not None
         }
         if expected.issubset(terminal):
             break
-        if attempt < 2:
-            await asyncio.sleep(1.0)
+        if attempt < attempts - 1:
+            await asyncio.sleep(poll_seconds)
     if not expected.issubset(terminal):
         missing = sorted(expected.difference(remote))
         nonterminal = sorted(expected.intersection(remote).difference(terminal))
@@ -122,18 +113,21 @@ async def require_remote_hud_receipt(job_id: str, trace_ids: tuple[str, ...]) ->
     for trace_id in remote_ids:
         observed = False
         last_problem = "no events"
-        for attempt in range(3):
+        for attempt in range(attempts):
             data = await client.aget(f"/trace/{trace_id}/events")
             events = data.get("events", []) if isinstance(data, dict) else []
             if isinstance(events, list):
                 try:
                     validate_remote_trace_projection(events)
+                    row = remote[_trace_key(trace_id)][1]
+                    if validate_remote_evaluation_receipt(events, expected_reward=row.get("reward")):
+                        raise TraceImportError("remote HUD grader reported an evaluation error")
                     observed = True
                     break
                 except TraceImportError as exc:
                     last_problem = str(exc)
-            if attempt < 2:
-                await asyncio.sleep(1.0)
+            if attempt < attempts - 1:
+                await asyncio.sleep(poll_seconds)
         if not observed:
             missing_events.append(f"{trace_id} ({last_problem})")
     if missing_events:

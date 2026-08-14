@@ -25,7 +25,7 @@ from cybergym_hud.openhands_trace import ProjectedStep, build_trace_import_metad
 from cybergym_hud.receipt import NativeReceipt
 
 
-def _remote_projected_events() -> list[dict[str, object]]:
+def _remote_projected_events(*, grader_error: bool = False) -> list[dict[str, object]]:
     projected = ProjectedStep(
         "response:fixture",
         AgentStep(content="finished", done=True),
@@ -40,6 +40,11 @@ def _remote_projected_events() -> list[dict[str, object]]:
                     status="completed",
                 )
             },
+        },
+        {
+            "kind": "scenario_evaluate",
+            "error": None if not grader_error else "grader failure",
+            "result": {"done": True, "isError": grader_error, "score": 0.0},
         },
     ]
 
@@ -334,7 +339,6 @@ async def test_restart_recovers_terminal_rows_and_leaves_unlaunched_rows_pending
                     "task_slug": "arvo-1",
                     "status": "completed",
                     "reward": 0.0,
-                    "evaluation_result": {"isError": False},
                 }
             ]
 
@@ -385,14 +389,13 @@ async def test_restart_halts_on_completed_trace_with_remote_grader_error(tmp_pat
     class Client:
         async def aget(self, path, *, params=None):
             if path == "/trace/trace-1/events":
-                return {"events": _remote_projected_events()}
+                return {"events": _remote_projected_events(grader_error=True)}
             return [
                 {
                     "id": "trace-1",
                     "task_slug": "arvo-1",
                     "status": "completed",
                     "reward": 0.0,
-                    "metadata": {"evaluation_result": {"isError": True}},
                 }
             ]
 

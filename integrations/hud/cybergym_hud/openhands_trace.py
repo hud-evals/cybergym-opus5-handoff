@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -933,6 +934,45 @@ def validate_remote_trace_projection(events: Sequence[Mapping[str, Any]]) -> dic
     return dict(receipt)
 
 
+def validate_remote_evaluation_receipt(
+    events: Sequence[Mapping[str, Any]],
+    *,
+    expected_reward: float | int | None = None,
+) -> bool:
+    """Validate the authoritative HUD grader event and return its error bit.
+
+    HUD's job trace rows do not consistently expose ``evaluation_result``.
+    The terminal ``scenario_evaluate`` event is the durable source of truth.
+    """
+
+    evaluations = [event for event in events if event.get("kind") == "scenario_evaluate"]
+    if len(evaluations) != 1:
+        raise TraceImportError("remote HUD trace does not contain exactly one grader receipt")
+    event = evaluations[0]
+    result = event.get("result")
+    if not isinstance(result, Mapping):
+        raise TraceImportError("remote HUD grader receipt is malformed")
+    is_error = result.get("isError")
+    if is_error is None:
+        is_error = result.get("is_error")
+    if not isinstance(is_error, bool) or result.get("done") is not True:
+        raise TraceImportError("remote HUD grader receipt lacks a terminal error marker")
+    score = result.get("score")
+    if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(float(score)):
+        raise TraceImportError("remote HUD grader receipt has an invalid score")
+    if expected_reward is not None:
+        if (
+            isinstance(expected_reward, bool)
+            or not isinstance(expected_reward, (int, float))
+            or not math.isfinite(float(expected_reward))
+            or not math.isclose(float(score), float(expected_reward), rel_tol=1e-9, abs_tol=1e-9)
+        ):
+            raise TraceImportError("remote HUD grader score disagrees with the trace reward")
+    if is_error is False and event.get("error") not in (None, ""):
+        raise TraceImportError("remote HUD grader event contradicts its success marker")
+    return is_error
+
+
 __all__ = [
     "DecodedOpenHandsEvent",
     "OpenHandsEventProjector",
@@ -944,4 +984,5 @@ __all__ = [
     "map_openhands_receipt",
     "runtime_secret_values",
     "validate_remote_trace_projection",
+    "validate_remote_evaluation_receipt",
 ]
