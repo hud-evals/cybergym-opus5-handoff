@@ -745,7 +745,7 @@ async def _run_and_record(
         projection_receipt.log_dir
         and (Path(projection_receipt.log_dir) / "trajectory").exists()
     )
-    if projection_receipt.status == "completed" or trajectory_exists:
+    if projection_receipt.status == "completed" or trajectory_exists or live_projections:
         try:
             if len(live_projections) != 1:
                 raise RuntimeError("native executor did not return one final live trace projection")
@@ -756,18 +756,6 @@ async def _run_and_record(
                 receipt_log_dir.relative_to(config.log_dir.expanduser().resolve())
             except ValueError as exc:
                 raise RuntimeError("native receipt log directory escaped the configured log root") from exc
-            workspace_submit = None
-            if projection_receipt.agent_id:
-                run_name = (
-                    f"{projection_receipt.task_id.replace(':', '_')}-"
-                    f"{projection_receipt.agent_id}"
-                )
-                workspace_submit = config.tmp_dir / run_name / "workspace" / "submit.sh"
-            imported = import_openhands_trace(
-                projection_receipt,
-                workspace_submit=workspace_submit,
-                redactions=(*runtime_secret_values(), *(value for value in (config.llm_api_key,) if value)),
-            )
             live_steps = live_projections[0]
             live_metadata = build_trace_import_metadata(
                 live_steps,
@@ -777,13 +765,30 @@ async def _run_and_record(
                     else "partial_error"
                 ),
             )
-            if tuple(item.key for item in live_steps) != tuple(item.key for item in imported.steps):
-                raise RuntimeError("live and saved OpenHands projections disagree on step identities")
-            for digest_name in ("projected_steps_sha256", "projected_events_sha256"):
-                if live_metadata[digest_name] != imported.metadata.get(digest_name):
-                    raise RuntimeError(
-                        f"live and saved OpenHands projections disagree on {digest_name}"
+            live_metadata["saved_trajectory_reconciled"] = trajectory_exists
+            if trajectory_exists:
+                workspace_submit = None
+                if projection_receipt.agent_id:
+                    run_name = (
+                        f"{projection_receipt.task_id.replace(':', '_')}-"
+                        f"{projection_receipt.agent_id}"
                     )
+                    workspace_submit = config.tmp_dir / run_name / "workspace" / "submit.sh"
+                imported = import_openhands_trace(
+                    projection_receipt,
+                    workspace_submit=workspace_submit,
+                    redactions=(
+                        *runtime_secret_values(),
+                        *(value for value in (config.llm_api_key,) if value),
+                    ),
+                )
+                if tuple(item.key for item in live_steps) != tuple(item.key for item in imported.steps):
+                    raise RuntimeError("live and saved OpenHands projections disagree on step identities")
+                for digest_name in ("projected_steps_sha256", "projected_events_sha256"):
+                    if live_metadata[digest_name] != imported.metadata.get(digest_name):
+                        raise RuntimeError(
+                            f"live and saved OpenHands projections disagree on {digest_name}"
+                        )
             import_metadata = live_metadata
         except Exception as exc:
             diagnostic = f"{type(exc).__name__}: OpenHands trajectory import failed; inspect private rollout logs"

@@ -669,6 +669,52 @@ async def test_projected_steps_are_acknowledged_on_the_event_loop_before_receipt
 
 
 @pytest.mark.asyncio
+async def test_error_receipt_keeps_reconciled_live_prefix_without_saved_trajectory(
+    monkeypatch: pytest.MonkeyPatch,
+    config: NativeOpenHandsConfig,
+) -> None:
+    monkeypatch.setattr("cybergym_hud.native.flush_telemetry", lambda _timeout: True)
+    monkeypatch.setattr(
+        "cybergym_hud.native.import_openhands_trace",
+        lambda *_args, **_kwargs: pytest.fail("no saved trajectory should be imported"),
+    )
+    projected = ProjectedStep(
+        "agent-message:7",
+        AgentStep(content="validated partial assistant turn"),
+    )
+
+    def executor(runtime_config, binding):
+        assert runtime_config.trace_step_sink is not None
+        assert runtime_config.trace_projection_sink is not None
+        runtime_config.trace_step_sink(projected.step)
+        runtime_config.trace_projection_sink((projected,))
+        return NativeReceipt(
+            status="error",
+            task_id=binding.task_id,
+            server=binding.server,
+            run_profile=config.receipt_profile(),
+            agent_id="5" * 32,
+            log_dir=str(config.log_dir / "partial-run"),
+            error="controller interrupted",
+        )
+
+    trace = Trace()
+    run = SimpleNamespace(
+        _args=_task_args(NativeTaskBinding(task_id="arvo:10013", server=config.server)),
+        trace=trace,
+        record=trace.record,
+    )
+    await NativeOpenHandsAgent(config, executor=executor)(run)
+
+    assert [step.source for step in trace.steps] == ["agent", "system"]
+    metadata = trace.extra["openhands_trace_import"]
+    assert metadata["status"] == "partial_error"
+    assert metadata["projected_step_count"] == 1
+    assert metadata["saved_trajectory_reconciled"] is False
+    assert trace.status == "error"
+
+
+@pytest.mark.asyncio
 async def test_false_telemetry_flush_changes_completion_to_error(
     monkeypatch: pytest.MonkeyPatch,
     config: NativeOpenHandsConfig,
