@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -164,6 +165,21 @@ def test_plan_has_stable_trace_scoped_span_ids_and_no_content_in_summary() -> No
     summary = json.dumps(first.public_summary(mode="dry-run"))
     assert "repair the target" not in summary
     assert first.public_summary(mode="dry-run")["network_write_performed"] is False
+
+
+def test_mapper_may_return_its_own_structural_projected_step_type() -> None:
+    @dataclass(frozen=True)
+    class ProjectedStep:
+        key: str
+        step: Step
+
+    plan = build_backfill_plan(
+        TRACE_ID,
+        [ProjectedStep("user:prompt", _user())],
+        redactor=StepRedactor(),
+    )
+
+    assert plan.event_counts == {"user_message": 1}
 
 
 def test_span_id_stays_stable_for_same_key_but_plan_digest_detects_payload_drift() -> None:

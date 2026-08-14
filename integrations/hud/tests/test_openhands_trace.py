@@ -4,6 +4,7 @@ import json
 import re
 from copy import deepcopy
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from hud.agents.types import AgentStep, ToolStep
@@ -11,12 +12,15 @@ from mcp.types import TextContent
 
 from cybergym_hud.contract import OG_PROMPT
 from cybergym_hud.openhands_trace import (
+    DecodedOpenHandsEvent,
     OpenHandsEventProjector,
     TraceImportError,
     import_openhands_trace,
     map_openhands_receipt,
+    validate_remote_trace_projection,
 )
 from cybergym_hud.receipt import NativeReceipt, NativeRunProfile
+from cybergym_hud.trace_backfill import StepRedactor, build_backfill_plan
 
 
 def _response(response_id: str, calls: list[tuple[str, str, dict]], *, reasoning: str | None = None) -> dict:
@@ -170,6 +174,37 @@ def test_projects_user_messages_as_typed_text_content() -> None:
     assert projected[0].step.source == "user"
     assert isinstance(projected[0].step.messages[0].content, TextContent)
     assert projected[0].step.messages[0].content.text == "continue"
+    assert projected[0].step.ended_at == projected[0].step.started_at
+
+
+def test_projects_sanitized_decoded_events_without_raw_redecode() -> None:
+    projector = OpenHandsEventProjector()
+    raw = _parallel_events()
+    decoded = tuple(projector.decode(event, origin="event_store") for event in raw)
+
+    assert all(isinstance(event, DecodedOpenHandsEvent) for event in decoded)
+    assert projector.project(decoded, final=True, origin="event_store") == projector.project(
+        raw,
+        final=True,
+        origin="event_store",
+    )
+
+
+def test_rejects_mixed_raw_and_decoded_events() -> None:
+    projector = OpenHandsEventProjector()
+    raw = _parallel_events()
+    decoded = projector.decode(raw[0], origin="event_store")
+
+    with pytest.raises(TraceImportError, match="mixes raw and decoded"):
+        projector.project([decoded, raw[1]], final=False, origin="event_store")
+
+
+def test_live_prompt_suppression_withholds_empty_prefix() -> None:
+    projector = OpenHandsEventProjector()
+
+    assert projector.project([], final=False, skip_initial_user_prompt=OG_PROMPT) == ()
+    with pytest.raises(TraceImportError, match="has no outer user prompt"):
+        projector.project([], final=True, skip_initial_user_prompt=OG_PROMPT)
 
 
 def test_live_prefix_emits_agent_and_only_contiguous_tool_results() -> None:
@@ -217,6 +252,38 @@ def test_divergent_duplicate_provider_response_fails_closed() -> None:
     events[1]["tool_call_metadata"]["model_response"]["model"] = "diverged"
     with pytest.raises(TraceImportError, match="divergent provider payloads"):
         OpenHandsEventProjector().project(events, final=True)
+
+
+def test_duplicate_provider_tool_call_ids_fail_closed() -> None:
+    response = _response(
+        "response-duplicate-call",
+        [
+            ("same-call", "execute_bash", {"command": "one"}),
+            ("same-call", "web_read", {"url": "http://fixture"}),
+        ],
+    )
+    with pytest.raises(TraceImportError, match="repeats a provider tool-call id"):
+        OpenHandsEventProjector().decode(
+            _action(2, "run", response, "same-call"),
+            origin="fixture",
+        )
+
+
+def test_finish_provider_call_requires_openhands_finish_action() -> None:
+    response = _response("response-false-finish", [("call-finish", "finish", {"final_thought": "done"})])
+    with pytest.raises(TraceImportError, match="exact OpenHands finish"):
+        OpenHandsEventProjector().project(
+            [_action(2, "run", response, "call-finish")],
+            final=True,
+        )
+
+
+def test_openhands_finish_action_requires_finish_provider_call() -> None:
+    response = _response("response-false-finish", [("call-run", "execute_bash", {"command": "true"})])
+    event = _action(2, "finish", response, "call-run")
+    event["args"] = {"final_thought": "done"}
+    with pytest.raises(TraceImportError, match="mixes finish"):
+        OpenHandsEventProjector().project([event], final=True)
 
 
 def _profile() -> NativeRunProfile:
@@ -270,6 +337,7 @@ def test_posthoc_import_verifies_prompt_redacts_task_secrets_and_digests(tmp_pat
     assert imported.metadata["agent_step_count"] == 2
     assert imported.metadata["tool_step_count"] == 2
     assert len(imported.metadata["projected_steps_sha256"]) == 64
+    assert len(imported.metadata["projected_events_sha256"]) == 64
     assert all(value not in encoded for value in (agent_id, checksum, server))
     assert not any(item.step.source == "user" for item in imported.steps)
 
@@ -279,6 +347,119 @@ def test_posthoc_import_verifies_prompt_redacts_task_secrets_and_digests(tmp_pat
     assert backfill[0].key == "user:0"
     assert backfill[0].step.messages[0].content.text == OG_PROMPT
     assert [item.key for item in backfill[1:]] == [item.key for item in imported.steps]
+
+    remote_events = []
+    for item in imported.steps:
+        step = item.step
+        if isinstance(step, AgentStep):
+            remote_events.append(
+                {
+                    "kind": "agent_message",
+                    "text": step.content,
+                    "reasoning": step.reasoning,
+                    "tool_calls": [
+                        {
+                            "tool_call_id": call.id,
+                            "name": call.name,
+                            "arguments": call.arguments or {},
+                        }
+                        for call in step.tool_calls
+                    ],
+                }
+            )
+        elif isinstance(step, ToolStep):
+            assert step.call is not None and step.result is not None
+            result_text = "\n".join(
+                content.text for content in step.result.content if isinstance(content, TextContent)
+            )
+            remote_events.append(
+                {
+                    "kind": "tool_call",
+                    "tool_name": step.call.name,
+                    "arguments": step.call.arguments or {},
+                    "result_text": result_text,
+                    "result_data": None,
+                    "error": None,
+                }
+            )
+    remote_events.append(
+        {
+            "kind": "raw",
+            "attributes": {"openhands_trace_import": imported.metadata},
+        }
+    )
+    assert validate_remote_trace_projection(remote_events) == imported.metadata
+
+    corrupted = deepcopy(remote_events)
+    corrupted[0]["text"] = "same counts, different assistant content"
+    with pytest.raises(TraceImportError, match="conversation content disagrees"):
+        validate_remote_trace_projection(corrupted)
+
+
+def test_projector_output_builds_timestamp_complete_1_14_22_backfill_plan(tmp_path: Path) -> None:
+    agent_id = "e" * 32
+    checksum = "f" * 64
+    server = "http://127.0.0.1:8666"
+    task_id = "arvo:10252"
+    events: list[dict] = [
+        {
+            "id": 0,
+            "timestamp": "2026-01-02T03:04:00",
+            "source": "user",
+            "message": "fixture",
+            "action": "message",
+            "args": {"content": OG_PROMPT},
+        }
+    ]
+    event_id = 1
+    # Thirteen ordinary assistant turns: nine parallel pairs plus four
+    # single calls = 22 tool results, followed by one finish turn.
+    for group in range(13):
+        call_count = 2 if group < 9 else 1
+        calls = [
+            (f"call-{group}-{index}", "execute_bash", {"command": f"fixture-{group}-{index}"})
+            for index in range(call_count)
+        ]
+        response = _response(f"response-{group}", calls)
+        for call_id, _name, _arguments in calls:
+            events.append(_action(event_id, "run", response, call_id))
+            action_id = event_id
+            event_id += 1
+            events.append(_observation(event_id, action_id, "run", response, call_id, "ok"))
+            event_id += 1
+    events.append(_finish(event_id, "Finished fixture task."))
+    (tmp_path / "args.json").write_text(
+        json.dumps(
+            {
+                "task": {
+                    "task_id": task_id,
+                    "agent_id": agent_id,
+                    "checksum": checksum,
+                    "server": server,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "trajectory").write_text(json.dumps(events), encoding="utf-8")
+    receipt = NativeReceipt(
+        status="completed",
+        task_id=task_id,
+        server=server,
+        run_profile=_profile(),
+        agent_id=agent_id,
+        upstream_returned_agent_id=agent_id,
+        log_dir=str(tmp_path),
+    )
+    sidecar = tmp_path / "receipt.json"
+    sidecar.write_text(receipt.model_dump_json(), encoding="utf-8")
+
+    plan = build_backfill_plan(
+        str(UUID("12345678-1234-5678-1234-567812345678")),
+        map_openhands_receipt(sidecar),
+        redactor=StepRedactor(),
+    )
+    assert plan.event_counts == {"user_message": 1, "agent_message": 14, "tool_call": 22}
 
 
 def test_error_receipt_preserves_validated_partial_transcript(tmp_path: Path) -> None:

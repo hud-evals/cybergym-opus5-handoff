@@ -47,7 +47,7 @@ class TraceImportError(RuntimeError):
 class _Call:
     id: str
     name: str
-    arguments: dict[str, Any] | str | None
+    arguments: dict[str, Any] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,17 +118,22 @@ class _Redactor:
             return value
         raise TraceImportError(f"unsupported value in tool arguments: {type(value).__name__}")
 
-    def arguments(self, value: Any) -> dict[str, Any] | str | None:
+    def arguments(self, value: Any) -> dict[str, Any] | None:
         redacted = self.value(value)
-        if redacted is None or isinstance(redacted, str):
-            return redacted
+        if redacted is None:
+            return None
+        if not isinstance(redacted, dict):
+            raise TraceImportError("provider tool arguments must be a JSON object")
         try:
             canonical = json.dumps(redacted, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         except (TypeError, ValueError) as exc:
             raise TraceImportError("redacted tool arguments are not JSON serializable") from exc
         if len(canonical.encode()) <= _MAX_EXPORTED_FIELD_BYTES:
             return redacted
-        return _bounded_text(canonical)
+        # Keep the bounded representation object-shaped so HUD's v1 control-
+        # plane schema and the historical backfill verifier can still project
+        # it as a tool call instead of degrading the whole span to ``raw``.
+        return {"__hud_truncated_json__": _bounded_text(canonical)}
 
 
 def _bounded_text(value: str) -> str:
@@ -237,12 +242,15 @@ class OpenHandsEventProjector:
             if isinstance(arguments, str):
                 try:
                     arguments = json.loads(arguments)
-                except json.JSONDecodeError:
-                    # HUD admits the provider string without executing it; retain
-                    # it so the displayed request is faithful rather than guessed.
-                    pass
+                except json.JSONDecodeError as exc:
+                    raise TraceImportError(
+                        f"{origin} response {response_id} call {provider_id} arguments are not JSON"
+                    ) from exc
             arguments = self._redactor.arguments(arguments)
             calls.append(_Call(provider_id, name, arguments))
+
+        if len({call.id for call in calls}) != len(calls):
+            raise TraceImportError(f"{origin} response {response_id} repeats a provider tool-call id")
 
         if call_id not in {call.id for call in calls}:
             raise TraceImportError(f"{origin} event {event_id} call id is absent from provider response")
@@ -334,7 +342,15 @@ class OpenHandsEventProjector:
         origin: str = "trajectory",
         skip_initial_user_prompt: str | None = None,
     ) -> tuple[ProjectedStep, ...]:
-        decoded = [self.decode(raw, origin=origin) for raw in events]
+        event_list = list(events)
+        decoded_inputs = [isinstance(event, DecodedOpenHandsEvent) for event in event_list]
+        if any(decoded_inputs) and not all(decoded_inputs):
+            raise TraceImportError(f"{origin} mixes raw and decoded OpenHands events")
+        decoded = (
+            event_list
+            if all(decoded_inputs)
+            else [self.decode(raw, origin=origin) for raw in event_list]
+        )
         seen_event_ids: set[str] = set()
         for event in decoded:
             if event.event_id in seen_event_ids:
@@ -345,7 +361,11 @@ class OpenHandsEventProjector:
         skipped_user_id: str | None = None
         if skip_initial_user_prompt is not None:
             first_visible = next((event for event in decoded if event.kind != "skip"), None)
-            if first_visible is None or first_visible.kind != "user" or first_visible.text != skip_initial_user_prompt:
+            if first_visible is None:
+                if final:
+                    raise TraceImportError(f"{origin} has no outer user prompt")
+                return ()
+            if first_visible.kind != "user" or first_visible.text != skip_initial_user_prompt:
                 raise TraceImportError(f"{origin} first user event is not the expected outer prompt")
             skipped_user_id = first_visible.event_id
         response_order: list[str] = []
@@ -376,6 +396,13 @@ class OpenHandsEventProjector:
             if len(action_by_call) != len(actions):
                 raise TraceImportError(f"response {response_id} repeats an action call id")
             is_finish = len(exemplar.calls) == 1 and exemplar.calls[0].name == "finish"
+            finish_actions = [event for event in actions if event.action_name == "finish"]
+            finish_calls = [call for call in exemplar.calls if call.name == "finish"]
+            if is_finish:
+                if len(finish_actions) != 1 or len(actions) != 1:
+                    raise TraceImportError(f"finish response {response_id} is not one exact OpenHands finish action")
+            elif finish_actions or finish_calls:
+                raise TraceImportError(f"response {response_id} mixes finish with non-finish actions")
             complete_actions = set(action_by_call) == set(call_ids)
             obs_by_call = {event.call_id: event for event in observations}
             if len(obs_by_call) != len(observations):
@@ -466,6 +493,7 @@ class OpenHandsEventProjector:
                                 )
                             ],
                             started_at=event.timestamp,
+                            ended_at=event.timestamp,
                         ),
                     )
                 )
@@ -518,6 +546,140 @@ def _submit_secrets(path: Path | None) -> tuple[str, ...]:
     return tuple(values)
 
 
+def _visible_user_text(step: Step) -> str:
+    parts: list[str] = []
+    for message in step.messages:
+        content = message.content
+        if isinstance(content, TextContent) and content.text:
+            parts.append(content.text)
+    return "\n\n".join(parts)
+
+
+def _normalize_mcp_result(result: object) -> tuple[str | None, object | None]:
+    if not isinstance(result, Mapping):
+        return (result, None) if isinstance(result, str) else (None, result)
+    result_dict = dict(result)
+    if "structuredContent" in result_dict:
+        return None, result_dict
+    content = result_dict.get("content")
+    if isinstance(content, list):
+        text_parts = [
+            item["text"]
+            for item in content
+            if isinstance(item, Mapping) and item.get("type") == "text" and isinstance(item.get("text"), str)
+        ]
+        joined = "\n".join(text_parts) if text_parts else None
+        return joined, result_dict if joined is None else None
+    if isinstance(content, str):
+        return content, None
+    return None, result_dict
+
+
+def _projected_event_view(item: ProjectedStep) -> dict[str, Any]:
+    step = item.step
+    if step.source == "user":
+        return {"kind": "user_message", "text": _visible_user_text(step)}
+    if isinstance(step, AgentStep):
+        return {
+            "kind": "agent_message",
+            "text": step.content,
+            "reasoning": step.reasoning,
+            "tool_calls": [
+                {
+                    "tool_call_id": call.id,
+                    "name": call.name,
+                    "arguments": call.arguments or {},
+                }
+                for call in step.tool_calls
+            ],
+        }
+    if isinstance(step, ToolStep) and step.call is not None and step.result is not None:
+        result = step.result.model_dump(mode="json", exclude_none=True)
+        result_text, result_data = _normalize_mcp_result(result)
+        is_error = bool(result.get("isError"))
+        return {
+            "kind": "tool_call",
+            "tool_name": step.call.name,
+            "arguments": step.call.arguments or {},
+            "result_text": None if is_error else result_text,
+            "result_data": result_data,
+            "error": (step.error or result_text or "tool error (no message)")
+            if is_error or step.error
+            else None,
+        }
+    raise TraceImportError(f"projected step {item.key} has no control-plane-visible representation")
+
+
+def _remote_event_view(event: Mapping[str, Any]) -> dict[str, Any]:
+    kind = event.get("kind")
+    if kind == "user_message":
+        return {"kind": kind, "text": event.get("text")}
+    if kind == "agent_message":
+        raw_calls = event.get("tool_calls", [])
+        if not isinstance(raw_calls, list):
+            raise TraceImportError("remote HUD agent tool calls are malformed")
+        calls: list[dict[str, Any]] = []
+        for raw_call in raw_calls:
+            if not isinstance(raw_call, Mapping):
+                raise TraceImportError("remote HUD agent tool call is malformed")
+            calls.append(
+                {
+                    "tool_call_id": raw_call.get("tool_call_id"),
+                    "name": raw_call.get("name"),
+                    "arguments": raw_call.get("arguments") or {},
+                }
+            )
+        return {
+            "kind": kind,
+            "text": event.get("text"),
+            "reasoning": event.get("reasoning"),
+            "tool_calls": calls,
+        }
+    if kind == "tool_call":
+        return {
+            "kind": kind,
+            "tool_name": event.get("tool_name"),
+            "arguments": event.get("arguments") or {},
+            "result_text": event.get("result_text"),
+            "result_data": event.get("result_data"),
+            "error": event.get("error"),
+        }
+    raise TraceImportError("remote HUD event is not part of the imported conversation")
+
+
+def _canonical_sha256(value: object) -> str:
+    try:
+        canonical = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    except (TypeError, ValueError) as exc:
+        raise TraceImportError("projected HUD conversation is not canonical JSON") from exc
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def build_trace_import_metadata(
+    steps: Sequence[ProjectedStep],
+    *,
+    status: Literal["completed", "partial_error"],
+) -> dict[str, Any]:
+    """Bind the local projection to the exact control-plane-visible conversation."""
+
+    agent_count = sum(isinstance(item.step, AgentStep) for item in steps)
+    tool_count = sum(isinstance(item.step, ToolStep) for item in steps)
+    user_count = sum(item.step.source == "user" for item in steps)
+    canonical_steps = [{"key": item.key, "step": item.step.model_dump(mode="json")} for item in steps]
+    visible_events = [_projected_event_view(item) for item in steps]
+    return {
+        "schema_version": "1",
+        "status": status,
+        "projected_step_count": len(steps),
+        "agent_step_count": agent_count,
+        "tool_step_count": tool_count,
+        "user_step_count": user_count,
+        "source_has_tool_actions": tool_count > 0,
+        "projected_steps_sha256": _canonical_sha256(canonical_steps),
+        "projected_events_sha256": _canonical_sha256(visible_events),
+    }
+
+
 def import_openhands_trace(
     receipt: NativeReceipt,
     *,
@@ -564,30 +726,16 @@ def import_openhands_trace(
         skip_initial_user_prompt=None if include_initial_user_prompt else OG_PROMPT,
     )
     agent_count = sum(isinstance(item.step, AgentStep) for item in steps)
-    tool_count = sum(isinstance(item.step, ToolStep) for item in steps)
-    user_count = sum(item.step.source == "user" for item in steps)
     if agent_count < 1:
         raise TraceImportError("OpenHands trajectory has no model-visible assistant turn")
     if receipt.status == "completed" and not any(
         isinstance(item.step, AgentStep) and item.step.done for item in steps
     ):
         raise TraceImportError("completed OpenHands trajectory has no final assistant turn")
-    canonical = json.dumps(
-        [{"key": item.key, "step": item.step.model_dump(mode="json")} for item in steps],
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode()
-    metadata = {
-        "schema_version": "1",
-        "status": "completed" if receipt.status == "completed" else "partial_error",
-        "projected_step_count": len(steps),
-        "agent_step_count": agent_count,
-        "tool_step_count": tool_count,
-        "user_step_count": user_count,
-        "source_has_tool_actions": tool_count > 0,
-        "projected_steps_sha256": hashlib.sha256(canonical).hexdigest(),
-    }
+    metadata = build_trace_import_metadata(
+        steps,
+        status="completed" if receipt.status == "completed" else "partial_error",
+    )
     return TraceImportResult(steps=steps, metadata=metadata)
 
 
@@ -609,27 +757,22 @@ def map_openhands_receipt(path: Path) -> tuple[ProjectedStep, ...]:
 def validate_remote_trace_projection(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """Validate that a terminal remote HUD trace contains the imported transcript."""
 
-    visible_agents = []
-    for event in events:
-        attributes = event.get("attributes")
-        attribute_calls = attributes.get("tool_calls") if isinstance(attributes, Mapping) else None
-        if event.get("kind") == "agent_message" and (
-            event.get("text") or event.get("reasoning") or event.get("tool_calls") or attribute_calls
-        ):
-            visible_agents.append(event)
     receipts: list[Mapping[str, Any]] = []
     for event in events:
         attributes = event.get("attributes")
         if isinstance(attributes, Mapping) and isinstance(attributes.get("openhands_trace_import"), Mapping):
             receipts.append(attributes["openhands_trace_import"])
-    if not visible_agents:
-        raise TraceImportError("remote HUD trace has no model-visible assistant turn")
     if len(receipts) != 1:
         raise TraceImportError("remote HUD trace does not contain exactly one trajectory import receipt")
     receipt = receipts[0]
-    digest = receipt.get("projected_steps_sha256")
-    if receipt.get("status") not in {"completed", "partial_error"} or not isinstance(digest, str) or not re.fullmatch(
-        r"[0-9a-f]{64}", digest
+    local_digest = receipt.get("projected_steps_sha256")
+    visible_digest = receipt.get("projected_events_sha256")
+    if (
+        receipt.get("status") not in {"completed", "partial_error"}
+        or not isinstance(local_digest, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", local_digest)
+        or not isinstance(visible_digest, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", visible_digest)
     ):
         raise TraceImportError("remote HUD trajectory import receipt is invalid")
     agent_count = receipt.get("agent_step_count")
@@ -638,13 +781,31 @@ def validate_remote_trace_projection(events: Sequence[Mapping[str, Any]]) -> dic
     step_count = receipt.get("projected_step_count")
     if not all(isinstance(value, int) and value >= 0 for value in (agent_count, tool_count, user_count, step_count)):
         raise TraceImportError("remote HUD trajectory import counts are invalid")
-    if step_count != agent_count + tool_count + user_count or agent_count != len(visible_agents):
+    remote_agents = [event for event in events if event.get("kind") == "agent_message"]
+    remote_tools = [event for event in events if event.get("kind") == "tool_call"]
+    remote_users = [event for event in events if event.get("kind") == "user_message"] if user_count else []
+    if not remote_agents or any(
+        not (event.get("text") or event.get("reasoning") or event.get("tool_calls"))
+        for event in remote_agents
+    ):
+        raise TraceImportError("remote HUD trace has no complete model-visible assistant transcript")
+    if (
+        step_count != agent_count + tool_count + user_count
+        or agent_count != len(remote_agents)
+        or tool_count != len(remote_tools)
+        or (user_count and user_count != len(remote_users))
+    ):
         raise TraceImportError("remote HUD trajectory import counts disagree with projected events")
-    remote_tools = sum(event.get("kind") == "tool_call" for event in events)
-    if receipt.get("source_has_tool_actions") and remote_tools < 1:
+    if receipt.get("source_has_tool_actions") and not remote_tools:
         raise TraceImportError("remote HUD trace lost all source tool calls")
-    if remote_tools != tool_count:
-        raise TraceImportError("remote HUD tool-call count disagrees with import receipt")
+    imported_kinds = (
+        {"user_message", "agent_message", "tool_call"}
+        if user_count
+        else {"agent_message", "tool_call"}
+    )
+    imported_events = [event for event in events if event.get("kind") in imported_kinds]
+    if _canonical_sha256([_remote_event_view(event) for event in imported_events]) != visible_digest:
+        raise TraceImportError("remote HUD conversation content disagrees with import receipt")
     return dict(receipt)
 
 
@@ -654,6 +815,7 @@ __all__ = [
     "ProjectedStep",
     "TraceImportError",
     "TraceImportResult",
+    "build_trace_import_metadata",
     "import_openhands_trace",
     "map_openhands_receipt",
     "runtime_secret_values",

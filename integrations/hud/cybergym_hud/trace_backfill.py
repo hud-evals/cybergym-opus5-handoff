@@ -140,7 +140,7 @@ class KeyedStep:
 class StepMapper(Protocol):
     """Pure source mapper seam consumed by the backfill CLI."""
 
-    def __call__(self, source: Path) -> Mapping[str, Step] | Iterable[KeyedStep]: ...
+    def __call__(self, source: Path) -> Mapping[str, Step] | Iterable[object]: ...
 
 
 class BackfillTransport(Protocol):
@@ -488,9 +488,8 @@ class BackfillLedger:
                 raise
             except OSError as exc:
                 raise TraceBackfillError(f"could not write backfill ledger ({type(exc).__name__})") from None
-        finally:
-            os.close(descriptor)
-        try:
+            finally:
+                os.close(descriptor)
             try:
                 os.replace(temporary, self.path)
                 directory = os.open(self.path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
@@ -501,8 +500,13 @@ class BackfillLedger:
             except OSError as exc:
                 raise TraceBackfillError(f"could not commit backfill ledger ({type(exc).__name__})") from None
         finally:
-            if temporary.exists():
-                temporary.unlink()
+            try:
+                if temporary.exists():
+                    temporary.unlink()
+            except OSError:
+                # A mode-0600 orphan is safer than hiding the primary durable
+                # write failure. The next operator can inspect/delete it.
+                pass
         self._require_safe_regular_file(self.path)
 
     def _prepare_parent(self) -> None:
@@ -553,7 +557,7 @@ def apply_backfill(
         prior = traces.get(plan.trace_id)
         if isinstance(prior, dict) and prior.get("plan_sha256") != plan.plan_sha256:
             raise TraceBackfillError(
-                "this trace already has a different ledger plan; use a new namespace after review"
+                "this trace already has a different ledger plan; use a separate ledger after review"
             )
 
         initial = _fetch_remote_snapshot(transport, plan)
@@ -813,16 +817,26 @@ def _apply_summary(
     return summary
 
 
-def _normalize_mapped_steps(mapped: Mapping[str, Step] | Iterable[KeyedStep]) -> list[KeyedStep]:
+def _normalize_mapped_steps(mapped: Mapping[str, Step] | Iterable[object]) -> list[KeyedStep]:
     if isinstance(mapped, Mapping):
         return [KeyedStep(key=str(key), step=step) for key, step in mapped.items()]
     try:
         values = list(mapped)
     except TypeError:
         raise TraceBackfillError("mapper result is neither a mapping nor an iterable of KeyedStep") from None
-    if not all(isinstance(value, KeyedStep) for value in values):
-        raise TraceBackfillError("mapper iterable must contain only KeyedStep values")
-    return cast("list[KeyedStep]", values)
+    normalized: list[KeyedStep] = []
+    for value in values:
+        if isinstance(value, KeyedStep):
+            normalized.append(value)
+            continue
+        # Accept a source mapper's own frozen/dataclass ``ProjectedStep``
+        # without importing it here. This is the entire integration seam.
+        key = getattr(value, "key", None)
+        step = getattr(value, "step", None)
+        if not isinstance(key, str) or not isinstance(step, Step):
+            raise TraceBackfillError("mapper iterable values must expose string key and HUD Step attributes")
+        normalized.append(KeyedStep(key=key, step=step))
+    return normalized
 
 
 def _validate_key(key: str) -> None:

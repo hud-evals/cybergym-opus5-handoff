@@ -15,7 +15,7 @@ import re
 import stat
 import threading
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -56,6 +56,7 @@ class OpenHandsEventProjector(Protocol):
         events: Sequence[object],
         *,
         final: bool,
+        **kwargs: object,
     ) -> Sequence[object]:
         """Return the complete canonical projection for ``events``."""
 
@@ -84,6 +85,7 @@ class OpenHandsEventTailer:
         sink: Callable[[Step], None],
         poll_interval: float = 0.25,
         max_event_bytes: int = _DEFAULT_MAX_EVENT_BYTES,
+        project_kwargs: Mapping[str, object] | None = None,
     ) -> None:
         if poll_interval <= 0:
             raise ValueError("OpenHands trace poll interval must be positive")
@@ -94,6 +96,7 @@ class OpenHandsEventTailer:
         self._sink = sink
         self._poll_interval = poll_interval
         self._max_event_bytes = max_event_bytes
+        self._project_kwargs = dict(project_kwargs or {})
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._error: BaseException | None = None
@@ -160,6 +163,24 @@ class OpenHandsEventTailer:
 
         return self._final_step_count
 
+    def projection_snapshot(self) -> tuple[object, ...]:
+        """Return the finalized canonical projection without reading raw files."""
+
+        if self._final_step_count is None:
+            raise OpenHandsTraceError("OpenHands event tailer has not finalized")
+        events = [
+            stored.event
+            for origin in sorted(self._events)
+            if (stored := self._events[origin]).event is not None
+        ]
+        return tuple(
+            self._projector.project(
+                events,
+                final=True,
+                **self._project_kwargs,
+            )
+        )
+
     def _run(self) -> None:
         try:
             while not self._stop.is_set():
@@ -202,12 +223,23 @@ class OpenHandsEventTailer:
             )
             self._candidates.pop(origin, None)
 
-        events = [
-            stored.event
-            for origin in sorted(self._events)
-            if (stored := self._events[origin]).event is not None
-        ]
-        projection = list(self._projector.project(events, final=final))
+        events: list[object] = []
+        for origin, _path in paths:
+            stored = self._events.get(origin)
+            if stored is None:
+                # A higher-numbered event can stabilize before an earlier
+                # ordinary ``open(..., "w")`` write.  Never expose that
+                # out-of-order suffix to the semantic projector.
+                break
+            if stored.event is not None:
+                events.append(stored.event)
+        projection = list(
+            self._projector.project(
+                events,
+                final=final,
+                **self._project_kwargs,
+            )
+        )
         self._emit_new_suffix(projection)
         if final:
             if len(self._events) != len(paths):

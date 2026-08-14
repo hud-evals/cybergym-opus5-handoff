@@ -43,6 +43,7 @@ class FakeProjector:
         events: Sequence[object],
         *,
         final: bool,
+        **_kwargs: object,
     ) -> Sequence[FakeProjectedStep]:
         projected: list[FakeProjectedStep] = []
         for item in events:
@@ -128,6 +129,10 @@ def test_live_tail_waits_for_a_stable_file_and_finally_reconciles(tmp_path: Path
     assert tailer.emitted_step_counts == {"agent": 2}
     assert tailer.final_event_count == 2
     assert tailer.final_step_count == 2
+    assert [item.key for item in tailer.projection_snapshot()] == [
+        "response:one",
+        "response:two",
+    ]
 
 
 def test_repeated_reconciliation_never_reemits_a_step(tmp_path: Path) -> None:
@@ -250,6 +255,7 @@ class DuplicateProjector(FakeProjector):
         events: Sequence[object],
         *,
         final: bool,
+        **_kwargs: object,
     ) -> Sequence[FakeProjectedStep]:
         step = FakeProjectedStep(key="duplicate", step=AgentStep(content="same"))
         return [step, step] if events else []
