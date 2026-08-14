@@ -23,6 +23,27 @@ from cybergym_hud.native import NativeOpenHandsConfig
 from cybergym_hud.receipt import NativeReceipt
 
 
+def _remote_projected_events() -> list[dict[str, object]]:
+    return [
+        {"kind": "agent_message", "text": "finished", "reasoning": None, "tool_calls": []},
+        {
+            "kind": "raw",
+            "attributes": {
+                "openhands_trace_import": {
+                    "schema_version": "1",
+                    "status": "completed",
+                    "projected_step_count": 1,
+                    "agent_step_count": 1,
+                    "tool_step_count": 0,
+                    "user_step_count": 0,
+                    "source_has_tool_actions": False,
+                    "projected_steps_sha256": "a" * 64,
+                }
+            },
+        },
+    ]
+
+
 def _config(tmp_path: Path) -> NativeOpenHandsConfig:
     return NativeOpenHandsConfig(
         repository_root=Path(__file__).resolve().parents[3],
@@ -144,6 +165,16 @@ async def test_campaign_checkpoints_small_named_jobs_and_restart_skips_paid_task
                     "is_error": False,
                     "reward": 1.0,
                     "native_receipt": receipt.model_dump(mode="json"),
+                    "openhands_trace_import": {
+                        "schema_version": "1",
+                        "status": "completed",
+                        "projected_step_count": 1,
+                        "agent_step_count": 1,
+                        "tool_step_count": 0,
+                        "user_step_count": 0,
+                        "source_has_tool_actions": False,
+                        "projected_steps_sha256": "a" * 64,
+                    },
                 }
             )
         return {
@@ -295,7 +326,7 @@ async def test_restart_recovers_terminal_rows_and_leaves_unlaunched_rows_pending
         async def aget(self, path, *, params=None):
             if path == "/trace/trace-1/events":
                 assert params is None
-                return {"events": [{"type": "span"}]}
+                return {"events": _remote_projected_events()}
             assert params["offset"] == 0
             return [
                 {
@@ -354,7 +385,7 @@ async def test_restart_halts_on_completed_trace_with_remote_grader_error(tmp_pat
     class Client:
         async def aget(self, path, *, params=None):
             if path == "/trace/trace-1/events":
-                return {"events": [{"type": "span"}]}
+                return {"events": _remote_projected_events()}
             return [
                 {
                     "id": "trace-1",

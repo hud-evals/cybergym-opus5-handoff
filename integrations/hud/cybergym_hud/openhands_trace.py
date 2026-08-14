@@ -1,4 +1,10 @@
-"""Lossless, secret-safe projection of saved OpenHands events into HUD steps."""
+"""Faithful selected, secret-safe projection of OpenHands events into HUD steps.
+
+Only model-visible messages, tool requests, and tool results are selected; raw
+browser DOM/screenshot metadata is intentionally excluded. Exported text and
+argument fields over 256 KiB are deterministically truncated with their source
+byte count and SHA-256 digest.
+"""
 
 from __future__ import annotations
 
@@ -23,7 +29,10 @@ from .receipt import NativeReceipt
 REDACTION = "[REDACTED]"
 _MAX_TRACE_BYTES = 128 * 1024 * 1024
 _MAX_EXPORTED_FIELD_BYTES = 256 * 1024
-_RUNTIME_SECRET_NAME = re.compile(r"(?:API_KEY|TOKEN|PASSWORD|SECRET|CHECKSUM)$", re.IGNORECASE)
+_RUNTIME_SECRET_NAME = re.compile(
+    r"(?:API_KEY|TOKEN|PASSWORD|SECRET|SECRET_ACCESS_KEY|CREDENTIALS|PRIVATE_KEY|AUTH|CHECKSUM)$",
+    re.IGNORECASE,
+)
 _SENSITIVE_FIELD = re.compile(
     r"(?:api[_-]?key|access[_-]?token|auth(?:orization)?|bearer|cookie|password|secret|checksum|agent[_-]?id)",
     re.IGNORECASE,
@@ -674,6 +683,9 @@ def build_trace_import_metadata(
         "agent_step_count": agent_count,
         "tool_step_count": tool_count,
         "user_step_count": user_count,
+        "has_final_agent_done": any(
+            isinstance(item.step, AgentStep) and item.step.done for item in steps
+        ),
         "source_has_tool_actions": tool_count > 0,
         "projected_steps_sha256": _canonical_sha256(canonical_steps),
         "projected_events_sha256": _canonical_sha256(visible_events),
@@ -759,9 +771,17 @@ def validate_remote_trace_projection(events: Sequence[Mapping[str, Any]]) -> dic
 
     receipts: list[Mapping[str, Any]] = []
     for event in events:
+        candidates: list[object] = [event, event.get("extra"), event.get("attributes")]
         attributes = event.get("attributes")
-        if isinstance(attributes, Mapping) and isinstance(attributes.get("openhands_trace_import"), Mapping):
-            receipts.append(attributes["openhands_trace_import"])
+        if isinstance(attributes, Mapping):
+            candidates.extend((attributes.get("extra"), attributes.get("hud.payload")))
+            payload = attributes.get("hud.payload")
+            if isinstance(payload, Mapping):
+                candidates.append(payload.get("extra"))
+        for candidate in candidates:
+            if isinstance(candidate, Mapping) and isinstance(candidate.get("openhands_trace_import"), Mapping):
+                receipts.append(candidate["openhands_trace_import"])
+                break
     if len(receipts) != 1:
         raise TraceImportError("remote HUD trace does not contain exactly one trajectory import receipt")
     receipt = receipts[0]

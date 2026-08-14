@@ -25,7 +25,8 @@ from hud.telemetry import flush as flush_telemetry
 from hud.telemetry.context import get_current_trace_id
 from hud.types import Step
 
-from .contract import repository_root, validate_contract
+from .contract import openhands_system_prompt, repository_root, validate_contract
+from .openhands_trace import import_openhands_trace, runtime_secret_values
 from .receipt import NativeReceipt, NativeRunProfile, NativeTaskBinding, normalize_server
 from .trace_tail import OpenHandsEventTailer, OpenHandsTraceError
 from .upstream import require_upstream_agent_checkout
@@ -619,7 +620,10 @@ async def _run_and_record(
     """Execute one bound native rollout and attach its typed HUD receipt."""
 
     try:
-        binding = NativeTaskBinding.model_validate_json(run.prompt_text)
+        task_args = getattr(run, "_args", None)
+        if not isinstance(task_args, Mapping):
+            raise ValueError("HUD run does not expose the bound task setup arguments")
+        binding = NativeTaskBinding.model_validate({"schema_version": "1", **task_args})
         if binding.server != config.server:
             raise ValueError("HUD task server does not match native runner configuration")
         loop = asyncio.get_running_loop()
@@ -653,7 +657,7 @@ async def _run_and_record(
         task_id = "arvo:invalid"
         server = config.server
         try:
-            raw = json.loads(run.prompt_text)
+            raw = getattr(run, "_args", None)
             if isinstance(raw, dict):
                 task_id = str(raw.get("task_id", task_id))
                 server = str(raw.get("server", server))
@@ -686,11 +690,58 @@ async def _run_and_record(
         {
             "runner": receipt.runner,
             "native_openhands_receipt": payload,
+            "agent_config": {"system_prompt": openhands_system_prompt(config.repository_root)},
         }
     )
-    run.record(Step(source="agent", extra={"native_openhands_receipt": payload}))
+    import_metadata: dict[str, Any] | None = None
+    trajectory_exists = bool(receipt.log_dir and (Path(receipt.log_dir) / "trajectory").exists())
+    if receipt.status == "completed" or trajectory_exists:
+        try:
+            if receipt.log_dir is None:
+                raise RuntimeError("native receipt has no OpenHands log directory")
+            receipt_log_dir = Path(receipt.log_dir).expanduser().resolve()
+            try:
+                receipt_log_dir.relative_to(config.log_dir)
+            except ValueError as exc:
+                raise RuntimeError("native receipt log directory escaped the configured log root") from exc
+            workspace_submit = None
+            if receipt.agent_id:
+                run_name = f"{receipt.task_id.replace(':', '_')}-{receipt.agent_id}"
+                workspace_submit = config.tmp_dir / run_name / "workspace" / "submit.sh"
+            imported = import_openhands_trace(
+                receipt,
+                workspace_submit=workspace_submit,
+                redactions=(*runtime_secret_values(), *(value for value in (config.llm_api_key,) if value)),
+            )
+            for projected in imported.steps:
+                run.record(projected.step)
+            import_metadata = imported.metadata
+        except Exception as exc:
+            diagnostic = f"{type(exc).__name__}: OpenHands trajectory import failed; inspect private rollout logs"
+            import_metadata = {
+                "schema_version": "1",
+                "status": "error",
+                "error": diagnostic,
+            }
+    elif receipt.status == "error":
+        import_metadata = {
+            "schema_version": "1",
+            "status": "unavailable_native_error",
+            "error": "native rollout produced no saved OpenHands trajectory",
+        }
+    run.trace.extra["openhands_trace_import"] = import_metadata
+    # A receipt is system infrastructure metadata, never an assistant turn.
+    run.record(
+        Step(
+            source="system",
+            extra={
+                "native_openhands_receipt": payload,
+                "openhands_trace_import": import_metadata,
+            },
+        )
+    )
     run.trace.stop_reason = "done"
-    if receipt.status == "error":
+    if receipt.status == "error" or not import_metadata or import_metadata.get("status") != "completed":
         run.trace.status = "error"
 
 
@@ -730,7 +781,10 @@ class NativeOpenHandsBatchAgent(Agent):
 
     async def __call__(self, run: Any) -> None:
         try:
-            binding = NativeTaskBinding.model_validate_json(run.prompt_text)
+            task_args = getattr(run, "_args", None)
+            if not isinstance(task_args, Mapping):
+                raise ValueError("HUD run does not expose the bound task setup arguments")
+            binding = NativeTaskBinding.model_validate({"schema_version": "1", **task_args})
             config = self._configs[binding.task_id]
         except Exception as exc:
             # Use any profile only to encode a typed infrastructure error. The

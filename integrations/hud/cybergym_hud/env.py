@@ -7,6 +7,7 @@ from pathlib import Path
 from hud.environment import Answer, Environment, Workspace
 
 from .cleanup import cleanup_tracked_root
+from .contract import OG_PROMPT
 from .grading import _error, grade_receipt
 from .receipt import NativeReceipt, NativeTaskBinding
 
@@ -50,7 +51,9 @@ def build_env(
     @receipt_env.template(id="run_upstream_openhands", returns=NativeReceipt)
     async def run_upstream_openhands(task_id: str, server: str):
         binding = NativeTaskBinding(task_id=task_id, server=server)
-        answer = yield binding.model_dump_json()
+        # The HUD user turn is the exact prompt OpenHands receives. Binding
+        # remains in Task.args and is not exposed as model-visible JSON.
+        answer = yield OG_PROMPT
         if not isinstance(answer, Answer) or not isinstance(answer.content, NativeReceipt):
             yield _error("scheduler returned a malformed native OpenHands receipt")
             return

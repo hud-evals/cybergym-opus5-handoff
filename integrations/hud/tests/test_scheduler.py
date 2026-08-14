@@ -12,12 +12,15 @@ from uuid import UUID
 
 import pytest
 from hud import Taskset
+from hud.agents.types import AgentStep
 from hud.eval import Job
 from hud.eval.runtime import LocalRuntime
 from hud.graders import EvaluationResult
 
+from cybergym_hud.contract import OG_PROMPT
 from cybergym_hud.env import build_env
 from cybergym_hud.native import NativeOpenHandsAgent, NativeOpenHandsConfig
+from cybergym_hud.openhands_trace import ProjectedStep, TraceImportResult
 from cybergym_hud.receipt import NativeReceipt, NativeTaskBinding
 from cybergym_hud.scheduler import (
     _parser,
@@ -31,6 +34,28 @@ from cybergym_hud.scheduler import (
 )
 from cybergym_hud.tasks import make_task
 from cybergym_hud.taskset import task_ids
+
+
+def _remote_projected_events() -> list[dict[str, object]]:
+    return [
+        {"kind": "agent_message", "text": None, "reasoning": None, "tool_calls": [{"id": "call-1"}]},
+        {"kind": "tool_call", "name": "execute_bash"},
+        {
+            "kind": "raw",
+            "attributes": {
+                "openhands_trace_import": {
+                    "schema_version": "1",
+                    "status": "completed",
+                    "projected_step_count": 2,
+                    "agent_step_count": 1,
+                    "tool_step_count": 1,
+                    "user_step_count": 0,
+                    "source_has_tool_actions": True,
+                    "projected_steps_sha256": "a" * 64,
+                }
+            },
+        },
+    ]
 
 
 @pytest.fixture(autouse=True)
@@ -112,6 +137,23 @@ async def test_end_to_end_hud_receipt_and_upstream_grade(
             log_dir=str(tmp_path / "logs/run"),
         )
 
+    monkeypatch.setattr(
+        "cybergym_hud.native.import_openhands_trace",
+        lambda *_args, **_kwargs: TraceImportResult(
+            steps=(ProjectedStep("response:fixture", AgentStep(content="finished", done=True)),),
+            metadata={
+                "schema_version": "1",
+                "status": "completed",
+                "projected_step_count": 1,
+                "agent_step_count": 1,
+                "tool_step_count": 0,
+                "user_step_count": 0,
+                "source_has_tool_actions": False,
+                "projected_steps_sha256": "a" * 64,
+            },
+        ),
+    )
+
     try:
         taskset = Taskset("receipt", [make_task("arvo:10013", server=base_url)])
         job = await taskset.run(
@@ -120,7 +162,7 @@ async def test_end_to_end_hud_receipt_and_upstream_grade(
             max_concurrent=1,
         )
     finally:
-        server.shutdown()
+        await asyncio.to_thread(server.shutdown)
         server.server_close()
         thread.join(timeout=2)
 
@@ -188,7 +230,8 @@ async def test_run_one_flushes_final_workspace_before_applying_cleanup_policy(
         async def __call__(self, run) -> None:
             assert self.config.tmp_dir == observed_root
             assert self.config.remove_tmp is False
-            binding = NativeTaskBinding.model_validate_json(run.prompt_text)
+            assert run.prompt_text == OG_PROMPT
+            binding = NativeTaskBinding.model_validate({"schema_version": "1", **run._args})
             workspace = observed_root / f"arvo_10013-{'a' * 32}" / "workspace"
             workspace.mkdir(parents=True)
             (workspace / "poc").write_bytes(b"final exploit input")
@@ -485,7 +528,7 @@ async def test_remote_hud_receipt_paginates_full_catalog(
         async def aget(self, path: str, *, params: dict[str, int] | None = None):
             requested.append((path, params))
             if path.endswith("/events"):
-                return {"events": [{"type": "step"}]}
+                return {"events": _remote_projected_events()}
             assert params is not None
             start = params["offset"]
             stop = min(start + params["limit"], len(trace_ids))
@@ -520,7 +563,7 @@ async def test_remote_hud_receipt_rejects_completed_grader_error(
     class Client:
         async def aget(self, path: str, *, params=None):
             if path.endswith("/events"):
-                return {"events": [{"type": "step"}]}
+                return {"events": _remote_projected_events()}
             return {
                 "items": [
                     {

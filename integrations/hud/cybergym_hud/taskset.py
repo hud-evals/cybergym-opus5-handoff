@@ -8,7 +8,7 @@ from pathlib import Path
 
 from hud import Taskset
 
-from .contract import CONTRACT, repository_root
+from .contract import CONTRACT, openhands_system_prompt, repository_root
 from .tasks import make_task
 
 
@@ -28,12 +28,17 @@ def make_taskset(
     selected: Iterable[str] | None = None,
     root: str | Path | None = None,
 ) -> Taskset:
-    catalog = task_ids(root)
+    checkout = repository_root(root)
+    catalog = task_ids(checkout)
     ids = tuple(selected) if selected is not None else catalog
     unknown = sorted(set(ids).difference(catalog))
     if unknown:
         raise ValueError(f"unknown CyberGym task IDs: {unknown}")
-    return Taskset("cybergym-og-native-level1", [make_task(task_id, server=server) for task_id in ids])
+    system_prompt = openhands_system_prompt(checkout)
+    return Taskset(
+        "cybergym-og-native-level1",
+        [make_task(task_id, server=server, system_prompt=system_prompt) for task_id in ids],
+    )
 
 
 __all__ = ["make_taskset", "task_ids"]

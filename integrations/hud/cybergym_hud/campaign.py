@@ -28,6 +28,7 @@ from .native import (
     NativeOpenHandsConfig,
     execute_upstream_openhands,
 )
+from .openhands_trace import TraceImportError, validate_remote_trace_projection
 from .receipt import NativeReceipt, NativeTaskBinding
 from .scheduler import run_many, verify_and_persist_remote_receipt, write_summary
 from .taskset import make_taskset
@@ -526,16 +527,21 @@ async def require_remote_trace_events(
     missing: list[str] = []
     for trace_id in trace_ids:
         observed = False
+        last_problem = "no events"
         for attempt in range(3):
             data = await client.aget(f"/trace/{trace_id}/events")
             events = data.get("events", []) if isinstance(data, dict) else []
-            if isinstance(events, list) and events:
-                observed = True
-                break
+            if isinstance(events, list):
+                try:
+                    validate_remote_trace_projection(events)
+                    observed = True
+                    break
+                except TraceImportError as exc:
+                    last_problem = str(exc)
             if attempt < 2:
                 await asyncio.sleep(1.0)
         if not observed:
-            missing.append(trace_id)
+            missing.append(f"{trace_id} ({last_problem})")
     if missing:
         raise CampaignBlocked("HUD terminal receipts lack remotely readable telemetry events: " + ", ".join(missing))
 
@@ -693,6 +699,26 @@ def validate_attempt_result(
             raise CampaignBlocked("HUD native receipt omitted its task ID")
         if receipt.get("server") != config.server or receipt.get("run_profile") != expected_profile:
             raise CampaignBlocked(f"HUD native receipt profile drifted for {task_id}")
+        imported = run.get("openhands_trace_import")
+        expected_import_status = "completed" if receipt.get("status") == "completed" else "partial_error"
+        if not isinstance(imported, dict) or imported.get("status") != expected_import_status:
+            raise CampaignBlocked(f"HUD OpenHands transcript import failed for {task_id}")
+        digest = imported.get("projected_steps_sha256")
+        counts = (
+            imported.get("projected_step_count"),
+            imported.get("agent_step_count"),
+            imported.get("tool_step_count"),
+            imported.get("user_step_count", 0),
+        )
+        if (
+            not isinstance(digest, str)
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+            or not all(isinstance(value, int) and value >= 0 for value in counts)
+            or counts[0] != counts[1] + counts[2] + counts[3]
+            or counts[1] < 1
+        ):
+            raise CampaignBlocked(f"HUD OpenHands transcript import receipt is invalid for {task_id}")
         observed.append(task_id)
     if len(observed) != len(set(observed)) or set(observed) != set(expected_task_ids):
         raise CampaignBlocked(

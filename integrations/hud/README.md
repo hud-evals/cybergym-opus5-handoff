@@ -87,7 +87,10 @@ explicit for custom longer runs.
 
 HUD records task setup, the typed native receipt, non-secret model/budget/
 sampling/network settings, upstream grading metadata, reward, errors, and the
-upstream log directory. HUD v6 file tracking also observes a fresh,
+upstream log directory. Every task row also carries the exact pinned CodeAct
+system prompt in `agent_config`; HUD's SYSTEM pane requires a linked/synced task
+version, so an ad-hoc unsynced Job may not render that pane even though the row
+and trace metadata retain the prompt. HUD v6 file tracking also observes a fresh,
 trace-private upstream temporary root whose `.../workspace` directory is
 bind-mounted at `/workspace` for the model. The adapter publishes only the observation-only
 `filetracking/1` capability, never a HUD shell capability, so this telemetry
@@ -101,9 +104,14 @@ is an explicit infrastructure error instead of silent disk accumulation. This pr
 evidence without changing anything visible inside `/workspace`. A
 100-iteration/1200-second run is labeled
 `paper-eval-100`; the upstream script's 10-iteration default is labeled
-`script-default-10`; all other combinations are labeled `custom`. The full model/tool trajectory
-continues to live in OpenHands' upstream log output; this adapter does not
-translate it into HUD-native tool steps.
+`script-default-10`; all other combinations are labeled `custom`. OpenHands remains the
+authoritative agent loop and log owner. After it returns, the adapter projects
+the saved, ordered model-visible assistant turns, provider tool calls, and tool
+results into HUD-native steps. Parallel actions sharing one provider response
+become one assistant turn; raw DOM/screenshots and other private metadata are
+not exported. Exact runtime/task secrets and boundary-safe credential/flag
+patterns are redacted, and an import failure marks the trace as infrastructure
+error without changing the native receipt or grader result.
 
 Pinned OpenHands reports ordinary headless max-iteration exhaustion through
 its generic controller `error` state, while original CyberGym accepts the saved
@@ -533,8 +541,9 @@ sustain 15 independent containers.
 ## Artifacts, file tracking, and cleanup
 
 - HUD `filetracking/1` observes only each rollout's real OpenHands workspace;
-  it adds no shell or model tool. The full model/tool trajectory remains under
-  `CG_RESULTS_DIR/logs`, not in HUD-native tool steps.
+  it adds no shell or model tool. The authoritative full trajectory remains
+  under `CG_RESULTS_DIR/logs`; a selected, redacted model/tool transcript is
+  projected into HUD after the native run.
 - Normal runs delete their trace-private temporary root only after HUD flushes
   the final file diff. Root-owned files use the narrowly mounted, offline
   Docker cleanup fallback described above. `--keep-tmp` opts out and can

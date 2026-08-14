@@ -13,6 +13,7 @@ from typing import Any
 
 PINNED_UPSTREAM_COMMIT = "7656b71d07da6694e262f9c34ea994cd4849c0eb"
 PINNED_AGENT_COMMIT = "b5cbe061b25e5719d296711706710438f6693079"
+PINNED_CODEACT_SYSTEM_PROMPT_SHA256 = "0a68c2ef0798f23af1c67f392cccc52b2cbf12d284931d5f1dd3ee7179e001d6"
 EXPECTED_VISIBLE_FILES = frozenset({"repo-vul.tar.gz", "description.txt", "README.md", "submit.sh"})
 
 
@@ -48,6 +49,30 @@ def repository_root(value: str | Path | None = None) -> Path:
     if not (root / "src/cybergym").is_dir():
         raise RuntimeError(f"{root} is not a CyberGym checkout; pass --repository-root or set CYBERGYM_REPOSITORY_ROOT")
     return root
+
+
+def openhands_system_prompt(root: str | Path | None = None) -> str:
+    """Load the exact pinned CodeAct system prompt rendered with no variables."""
+
+    path = (
+        repository_root(root)
+        / "examples/agents/openhands/openhands-repo/openhands/agenthub/codeact_agent/prompts/system_prompt.j2"
+    )
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise RuntimeError("pinned OpenHands CodeAct system prompt is unavailable") from exc
+    if hashlib.sha256(raw).hexdigest() != PINNED_CODEACT_SYSTEM_PROMPT_SHA256:
+        raise RuntimeError("pinned OpenHands CodeAct system prompt bytes drifted")
+    try:
+        rendered = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError("pinned OpenHands CodeAct system prompt is not UTF-8") from exc
+    # This pinned template has no substitutions. Reject future template syntax
+    # rather than silently claiming a different render contract.
+    if "{{" in rendered or "{%" in rendered or "{#" in rendered:
+        raise RuntimeError("pinned OpenHands CodeAct system prompt unexpectedly requires rendering inputs")
+    return rendered.strip()
 
 
 def _sha256(path: Path) -> str:
@@ -94,6 +119,12 @@ def validate_contract(
         raise ValueError("native runner must delegate to upstream run_with_configs")
     if scaffold["task_generation"] != "exact_run_with_configs_without_mask_map_path":
         raise ValueError("native profile must preserve the example's unmasked generation")
+    if scaffold["system_prompt_source"] != (
+        "openhands-repo/openhands/agenthub/codeact_agent/prompts/system_prompt.j2"
+    ) or scaffold["system_prompt_sha256"] != PINNED_CODEACT_SYSTEM_PROMPT_SHA256:
+        raise ValueError("OpenHands CodeAct system prompt identity drifted")
+    if scaffold["user_prompt_template"] != "empty":
+        raise ValueError("OpenHands CodeAct user prompt template drifted")
     if frozenset(scaffold["model_visible_workspace_files"]) != EXPECTED_VISIBLE_FILES:
         raise ValueError("model-visible workspace surface drifted")
     if runtime["canonical"] != "native_docker_via_upstream_openhands":
@@ -110,8 +141,21 @@ def validate_contract(
         "recovery": "pull_official_ghcr_immutable_platform_manifest_then_apply_upstream_reference_as_local_tag",
     }:
         raise ValueError("pinned OpenHands runtime artifact identity drifted")
-    if runtime["hud_role"] != "scheduler_receipt_and_observation_only_filetracking":
+    if runtime["hud_role"] != "scheduler_receipt_filetracking_and_selected_openhands_trajectory_projection":
         raise ValueError("HUD must not replace the upstream agent or execution path")
+    if runtime["trajectory_projection"] != {
+        "source": "saved_openhands_trajectory_posthoc",
+        "assistant_grouping": "one_agent_step_per_unique_provider_response_id",
+        "parallel_tools": "provider_order_with_causal_tool_results",
+        "outer_user_prompt": "exact_pinned_og_prompt_without_duplicate_import",
+        "reasoning": "provider_or_action_text_only_never_fabricated_from_token_counts",
+        "raw_browser_metadata_exported": False,
+        "secret_redaction": "exact_runtime_and_task_secrets_plus_boundary_safe_patterns",
+        "oversized_field_policy": "truncate_over_262144_utf8_bytes_with_original_size_and_sha256",
+        "receipt_step_source": "system",
+        "failure_policy": "terminal_trace_error_and_paid_campaign_halt",
+    }:
+        raise ValueError("HUD OpenHands trajectory projection contract drifted")
     file_tracking = runtime["file_tracking"]
     if file_tracking != {
         "protocol": "filetracking/1",
@@ -212,6 +256,7 @@ def validate_contract(
     if not check_sources:
         return
     checkout = repository_root(root)
+    openhands_system_prompt(checkout)
     for relative, expected in modern_model["shim_sha256"].items():
         path = checkout / "integrations/hud" / relative
         if not path.is_file() or _sha256(path) != expected:

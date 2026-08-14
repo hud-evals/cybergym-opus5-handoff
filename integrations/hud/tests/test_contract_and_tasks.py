@@ -4,7 +4,7 @@ from importlib import resources
 
 import pytest
 
-from cybergym_hud.contract import CONTRACT, validate_contract
+from cybergym_hud.contract import CONTRACT, openhands_system_prompt, validate_contract
 from cybergym_hud.tasks import make_task
 from cybergym_hud.taskset import make_taskset, task_ids
 
@@ -73,7 +73,7 @@ def test_catalog_and_task_binding_cover_all_upstream_ids() -> None:
     assert row.id == "run_upstream_openhands"
     assert row.args == {"task_id": "arvo:10013", "server": "http://127.0.0.1:8666"}
     assert row.verifier is None
-    assert row.agent_config is None
+    assert row.agent_config == {"system_prompt": openhands_system_prompt()}
 
 
 def test_selected_taskset_has_no_persistent_agent_identity() -> None:

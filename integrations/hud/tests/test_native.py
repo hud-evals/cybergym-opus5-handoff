@@ -26,12 +26,17 @@ from cybergym_hud.native import (
     _OpenHandsSubprocessProxy,
     execute_upstream_openhands,
 )
+from cybergym_hud.openhands_trace import ProjectedStep, TraceImportResult
 from cybergym_hud.receipt import NativeReceipt, NativeTaskBinding
 
 
 class Box:
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
+
+
+def _task_args(binding: NativeTaskBinding) -> dict[str, str]:
+    return binding.model_dump(exclude={"schema_version"})
 
 
 def _write_controller_states(openhands_args, task_args, agent_id: str, states: list[tuple[str, str]]) -> None:
@@ -268,7 +273,7 @@ async def test_batch_prelaunch_verifier_runs_before_native_executor(
         prelaunch_verifier=verify,
     )
     with set_trace_context("a" * 32):
-        await agent(SimpleNamespace(prompt_text=binding.model_dump_json()))
+        await agent(SimpleNamespace(prompt_text="model-visible prompt", _args=_task_args(binding)))
     assert events == [("a" * 32, binding.task_id), ("record", "native")]
 
     async def block(_trace_id: str, _task_id: str) -> None:
@@ -280,7 +285,7 @@ async def test_batch_prelaunch_verifier_runs_before_native_executor(
         prelaunch_verifier=block,
     )
     with set_trace_context("b" * 32), pytest.raises(RuntimeError, match="HUD trace missing"):
-        await blocked(SimpleNamespace(prompt_text=binding.model_dump_json()))
+        await blocked(SimpleNamespace(prompt_text="model-visible prompt", _args=_task_args(binding)))
     assert events == []
 
 
@@ -547,7 +552,10 @@ def test_overlong_iteration_sentinel_fails_closed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_hud_agent_writes_typed_receipt_to_trace(config: NativeOpenHandsConfig) -> None:
+async def test_hud_agent_writes_typed_receipt_to_trace(
+    monkeypatch: pytest.MonkeyPatch,
+    config: NativeOpenHandsConfig,
+) -> None:
     expected = NativeReceipt(
         status="completed",
         task_id="arvo:10013",
@@ -555,16 +563,34 @@ async def test_hud_agent_writes_typed_receipt_to_trace(config: NativeOpenHandsCo
         run_profile=config.receipt_profile(),
         agent_id="1" * 32,
         upstream_returned_agent_id="1" * 32,
-        log_dir="/logs/run",
+        log_dir=str(config.log_dir / "run"),
     )
 
     def executor(_config, binding):
         assert binding.task_id == "arvo:10013"
         return expected
 
+    monkeypatch.setattr(
+        "cybergym_hud.native.import_openhands_trace",
+        lambda *_args, **_kwargs: TraceImportResult(
+            steps=(ProjectedStep("response:fixture", AgentStep(content="finished", done=True)),),
+            metadata={
+                "schema_version": "1",
+                "status": "completed",
+                "projected_step_count": 1,
+                "agent_step_count": 1,
+                "tool_step_count": 0,
+                "user_step_count": 0,
+                "source_has_tool_actions": False,
+                "projected_steps_sha256": "a" * 64,
+            },
+        ),
+    )
+
     trace = Trace()
     run = SimpleNamespace(
-        prompt_text=NativeTaskBinding(task_id="arvo:10013", server=config.server).model_dump_json(),
+        prompt_text="model-visible prompt",
+        _args=_task_args(NativeTaskBinding(task_id="arvo:10013", server=config.server)),
         trace=trace,
         record=trace.record,
     )
@@ -574,7 +600,8 @@ async def test_hud_agent_writes_typed_receipt_to_trace(config: NativeOpenHandsCo
     assert trace.stop_reason == "done"
     assert trace.extra["native_openhands_receipt"]["agent_id"] == "1" * 32
     assert trace.extra["native_openhands_receipt"]["run_profile"]["budget_profile"] == "custom"
-    assert trace.steps[-1].source == "agent"
+    assert [step.source for step in trace.steps] == ["agent", "system"]
+    assert trace.extra["openhands_trace_import"]["projected_step_count"] == 1
 
 
 @pytest.mark.asyncio
@@ -689,7 +716,8 @@ async def test_hud_cancellation_waits_for_the_native_worker_lifecycle(
 
     trace = Trace()
     run = SimpleNamespace(
-        prompt_text=NativeTaskBinding(task_id="arvo:10013", server=config.server).model_dump_json(),
+        prompt_text="model-visible prompt",
+        _args=_task_args(NativeTaskBinding(task_id="arvo:10013", server=config.server)),
         trace=trace,
         record=trace.record,
     )
@@ -716,7 +744,8 @@ async def test_hud_cancellation_waits_for_the_native_worker_lifecycle(
 async def test_hud_agent_rejects_cross_task_server_binding(config: NativeOpenHandsConfig) -> None:
     trace = Trace()
     run = SimpleNamespace(
-        prompt_text=json.dumps({"schema_version": "1", "task_id": "arvo:10013", "server": "http://127.0.0.1:9999"}),
+        prompt_text="model-visible prompt",
+        _args={"task_id": "arvo:10013", "server": "http://127.0.0.1:9999"},
         trace=trace,
         record=trace.record,
     )

@@ -494,3 +494,27 @@ def test_error_receipt_preserves_validated_partial_transcript(tmp_path: Path) ->
     imported = import_openhands_trace(receipt)
     assert imported.metadata["status"] == "partial_error"
     assert [item.key for item in imported.steps] == ["response:response-parallel", "tool:call-one"]
+
+
+def test_remote_projection_gate_requires_visible_agent_tool_shape_and_receipt() -> None:
+    receipt = {
+        "schema_version": "1",
+        "status": "completed",
+        "projected_step_count": 2,
+        "agent_step_count": 1,
+        "tool_step_count": 1,
+        "user_step_count": 0,
+        "source_has_tool_actions": True,
+        "projected_steps_sha256": "a" * 64,
+    }
+    events = [
+        {"kind": "agent_message", "text": None, "reasoning": None, "tool_calls": [{"id": "call-1"}]},
+        {"kind": "tool_call", "name": "execute_bash"},
+        {
+            "kind": "raw",
+            "attributes": {"hud.payload": {"extra": {"openhands_trace_import": receipt}}},
+        },
+    ]
+    assert validate_remote_trace_projection(events) == receipt
+    with pytest.raises(TraceImportError, match="lost all source tool calls"):
+        validate_remote_trace_projection([events[0], events[2]])

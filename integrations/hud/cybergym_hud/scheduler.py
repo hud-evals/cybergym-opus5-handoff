@@ -22,6 +22,7 @@ from .cleanup import cleanup_tracked_root
 from .contract import validate_contract
 from .env import build_env
 from .native import NativeOpenHandsAgent, NativeOpenHandsBatchAgent, NativeOpenHandsConfig
+from .openhands_trace import TraceImportError, validate_remote_trace_projection
 from .receipt import NativeReceipt, NativeTaskBinding
 from .taskset import make_taskset
 from .taskset import task_ids as catalog_task_ids
@@ -120,16 +121,21 @@ async def require_remote_hud_receipt(job_id: str, trace_ids: tuple[str, ...]) ->
     missing_events: list[str] = []
     for trace_id in remote_ids:
         observed = False
+        last_problem = "no events"
         for attempt in range(3):
             data = await client.aget(f"/trace/{trace_id}/events")
             events = data.get("events", []) if isinstance(data, dict) else []
-            if isinstance(events, list) and events:
-                observed = True
-                break
+            if isinstance(events, list):
+                try:
+                    validate_remote_trace_projection(events)
+                    observed = True
+                    break
+                except TraceImportError as exc:
+                    last_problem = str(exc)
             if attempt < 2:
                 await asyncio.sleep(1.0)
         if not observed:
-            missing_events.append(trace_id)
+            missing_events.append(f"{trace_id} ({last_problem})")
     if missing_events:
         raise RuntimeError("HUD receipts lack remotely readable telemetry events: " + ", ".join(missing_events))
     return remote_ids
@@ -229,6 +235,7 @@ def _summarize_run(run: Any, *, job_id: str, job_name: str) -> dict[str, Any]:
         "is_error": run.grade.is_error or run.trace.is_error,
         "evaluation": run.evaluation,
         "native_receipt": receipt,
+        "openhands_trace_import": run.trace.extra.get("openhands_trace_import"),
     }
 
 
