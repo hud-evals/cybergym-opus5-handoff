@@ -8,10 +8,12 @@ import json
 import os
 import re
 import stat
+import threading
 import tomllib
 from collections.abc import Awaitable, Callable, Mapping
-from concurrent.futures import Executor
-from dataclasses import dataclass
+from concurrent.futures import Executor, Future
+from contextvars import copy_context
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Literal
@@ -19,11 +21,13 @@ from uuid import UUID, uuid4
 
 import tomli_w
 from hud.agents.base import Agent
+from hud.telemetry import flush as flush_telemetry
 from hud.telemetry.context import get_current_trace_id
 from hud.types import Step
 
 from .contract import repository_root, validate_contract
 from .receipt import NativeReceipt, NativeRunProfile, NativeTaskBinding, normalize_server
+from .trace_tail import OpenHandsEventTailer, OpenHandsTraceError
 from .upstream import require_upstream_agent_checkout
 
 CAMPAIGN_RUNTIME_NANO_CPUS = 4_000_000_000
@@ -61,6 +65,10 @@ class NativeOpenHandsConfig:
     runtime_nano_cpus: int | None = None
     runtime_memory_bytes: int | None = None
     runtime_memory_swap_bytes: int | None = None
+    # Runtime-only bridge.  It is deliberately absent from repr/equality and
+    # every durable receipt/profile so callable state and trace credentials
+    # can never enter campaign journals.
+    trace_step_sink: Callable[[Step], None] | None = field(default=None, repr=False, compare=False)
 
     def normalized(self) -> NativeOpenHandsConfig:
         root = repository_root(self.repository_root)
@@ -112,6 +120,7 @@ class NativeOpenHandsConfig:
             runtime_nano_cpus=self.runtime_nano_cpus,
             runtime_memory_bytes=self.runtime_memory_bytes,
             runtime_memory_swap_bytes=self.runtime_memory_swap_bytes,
+            trace_step_sink=self.trace_step_sink,
         )
 
     def receipt_profile(self) -> NativeRunProfile:
@@ -326,6 +335,41 @@ class _OpenHandsSubprocessProxy:
         return self._delegate.run(command, *args, **kwargs)
 
 
+def _trace_redactions(config: NativeOpenHandsConfig) -> tuple[str, ...]:
+    """Collect exact secrets that could plausibly reach the child/event store."""
+
+    candidates = [
+        config.llm_api_key,
+        config.base_url,
+        *(os.environ.get(name) for name in (
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "LLM_API_KEY",
+            "HUD_API_KEY",
+            "CYBERGYM_API_KEY",
+            "DAYTONA_API_KEY",
+        )),
+    ]
+    return tuple(value for value in candidates if value)
+
+
+def _make_openhands_trace_tailer(
+    config: NativeOpenHandsConfig,
+    receipt_log_dir: Path,
+) -> OpenHandsEventTailer:
+    """Build the live bridge lazily so direct receipt-only calls stay cheap."""
+
+    if config.trace_step_sink is None:
+        raise ValueError("OpenHands trace tailer requires a HUD step sink")
+    from .openhands_trace import OpenHandsEventProjector
+
+    return OpenHandsEventTailer(
+        receipt_log_dir,
+        projector=OpenHandsEventProjector(redactions=_trace_redactions(config)),
+        sink=config.trace_step_sink,
+    )
+
+
 def execute_upstream_openhands(
     config: NativeOpenHandsConfig,
     binding: NativeTaskBinding,
@@ -418,9 +462,39 @@ def execute_upstream_openhands(
     # not serialize the expensive native OpenHands executions.
     original_uuid4 = upstream.uuid4
     upstream.uuid4 = lambda: fresh_uuid
+    returned: str | None = None
+    upstream_error: Exception | None = None
+    trace_setup_failed = False
+    trace_projection_failed = False
+    trace_tailer: OpenHandsEventTailer | None = None
+    trace_tailer_started = False
     try:
-        returned = upstream.run_with_configs(openhands_args, task_args)
-    except Exception as exc:
+        if config.trace_step_sink is not None:
+            try:
+                trace_tailer = _make_openhands_trace_tailer(config, receipt_log_dir)
+                trace_tailer.start()
+                trace_tailer_started = True
+            except Exception:
+                trace_setup_failed = True
+        if not trace_setup_failed:
+            try:
+                returned = upstream.run_with_configs(openhands_args, task_args)
+            except Exception as exc:
+                upstream_error = exc
+    finally:
+        if trace_tailer is not None and trace_tailer_started:
+            try:
+                # This is also the final full reconciliation.  It runs after
+                # upstream cleanup on success, exception, timeout, and the
+                # cancellation path (which waits for this worker to return).
+                trace_tailer.finish()
+            except OpenHandsTraceError:
+                trace_projection_failed = True
+        upstream.uuid4 = original_uuid4
+        if config.reasoning_effort or runtime_kwargs is not None:
+            upstream.subprocess = original_subprocess
+
+    if trace_setup_failed:
         return NativeReceipt(
             status="error",
             task_id=binding.task_id,
@@ -428,12 +502,30 @@ def execute_upstream_openhands(
             run_profile=run_profile,
             agent_id=agent_id,
             log_dir=str(receipt_log_dir),
-            error=f"upstream run_with_configs failed: {type(exc).__name__}: {exc}",
+            error="OpenHands HUD trajectory projection could not start; inspect the private rollout log",
         )
-    finally:
-        upstream.uuid4 = original_uuid4
-        if config.reasoning_effort or runtime_kwargs is not None:
-            upstream.subprocess = original_subprocess
+    if upstream_error is not None:
+        detail = " and HUD trajectory projection failed" if trace_projection_failed else ""
+        return NativeReceipt(
+            status="error",
+            task_id=binding.task_id,
+            server=binding.server,
+            run_profile=run_profile,
+            agent_id=agent_id,
+            log_dir=str(receipt_log_dir),
+            error=f"upstream run_with_configs failed{detail}; inspect the private rollout log",
+        )
+    if trace_projection_failed:
+        return NativeReceipt(
+            status="error",
+            task_id=binding.task_id,
+            server=binding.server,
+            run_profile=run_profile,
+            agent_id=agent_id,
+            upstream_returned_agent_id=returned,
+            log_dir=str(receipt_log_dir),
+            error="OpenHands HUD trajectory projection failed; inspect the private rollout log",
+        )
 
     if returned != agent_id:
         return NativeReceipt(
@@ -472,6 +564,52 @@ def execute_upstream_openhands(
     )
 
 
+def _threadsafe_trace_sink(run: Any, loop: asyncio.AbstractEventLoop) -> Callable[[Step], None]:
+    """Marshal tailer-thread records onto the active HUD trace context."""
+
+    loop_thread_id = threading.get_ident()
+    trace_context = copy_context()
+
+    def sink(step: Step) -> None:
+        if not isinstance(step, Step):
+            raise TypeError("OpenHands trajectory sink requires a HUD Step")
+        if threading.get_ident() == loop_thread_id:
+            run.record(step)
+            return
+
+        acknowledged: Future[None] = Future()
+
+        def record() -> None:
+            if not acknowledged.set_running_or_notify_cancel():
+                return
+            try:
+                run.record(step)
+            except BaseException as exc:
+                acknowledged.set_exception(exc)
+            else:
+                acknowledged.set_result(None)
+
+        loop.call_soon_threadsafe(record, context=trace_context.copy())
+        try:
+            # Recording is synchronous.  A timeout prevents an orphaned
+            # worker if the owning event loop has stopped servicing callbacks.
+            acknowledged.result(timeout=30.0)
+        except TimeoutError as exc:
+            acknowledged.cancel()
+            raise RuntimeError("HUD did not acknowledge a projected OpenHands step") from exc
+
+    return sink
+
+
+def _telemetry_error_receipt(receipt: NativeReceipt) -> NativeReceipt:
+    payload = receipt.model_dump(mode="python")
+    payload.update(
+        status="error",
+        error="HUD telemetry did not flush projected OpenHands steps",
+    )
+    return NativeReceipt.model_validate(payload)
+
+
 async def _run_and_record(
     run: Any,
     config: NativeOpenHandsConfig,
@@ -485,7 +623,8 @@ async def _run_and_record(
         if binding.server != config.server:
             raise ValueError("HUD task server does not match native runner configuration")
         loop = asyncio.get_running_loop()
-        worker = loop.run_in_executor(worker_pool, executor, config, binding)
+        runtime_config = replace(config, trace_step_sink=_threadsafe_trace_sink(run, loop))
+        worker = loop.run_in_executor(worker_pool, executor, runtime_config, binding)
         try:
             # Shield the native call so cancelling the HUD coroutine cannot
             # release its rollout slot while OpenHands/Docker is still alive.
@@ -497,6 +636,14 @@ async def _run_and_record(
             while not worker.done():
                 try:
                     await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    continue
+                except BaseException:
+                    break
+            flush_worker = loop.run_in_executor(None, flush_telemetry, 30.0)
+            while not flush_worker.done():
+                try:
+                    await asyncio.shield(flush_worker)
                 except asyncio.CancelledError:
                     continue
                 except BaseException:
@@ -525,6 +672,13 @@ async def _run_and_record(
                 run_profile=config.receipt_profile(),
                 error=f"native scheduler failed: {type(exc).__name__}: {exc}",
             )
+
+    try:
+        flushed = await asyncio.to_thread(flush_telemetry, 30.0)
+    except Exception:
+        flushed = False
+    if not flushed:
+        receipt = _telemetry_error_receipt(receipt)
 
     payload = receipt.model_dump(mode="json")
     run.trace.content = receipt.model_dump_json()

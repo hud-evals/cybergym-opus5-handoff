@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
+from hud.agents.types import AgentStep
 from hud.eval.file_tracking import FileTrackingClient
 from hud.telemetry.context import set_trace_context
 from hud.types import Trace
@@ -300,6 +301,35 @@ def test_upstream_execution_errors_become_bound_receipts(
     assert receipt.error
 
 
+def test_trace_tailer_finalizes_after_upstream_error(
+    monkeypatch: pytest.MonkeyPatch,
+    config: NativeOpenHandsConfig,
+) -> None:
+    events: list[str] = []
+
+    class FakeTailer:
+        def start(self) -> None:
+            events.append("start")
+
+        def finish(self) -> None:
+            events.append("finish")
+
+    monkeypatch.setattr(
+        "cybergym_hud.native._make_openhands_trace_tailer",
+        lambda _config, _receipt_dir: FakeTailer(),
+    )
+    configured = replace(config, trace_step_sink=lambda _step: None)
+    receipt = execute_upstream_openhands(
+        configured,
+        NativeTaskBinding(task_id="arvo:10013", server=config.server),
+        module=FakeUpstream(fail=True),
+        uuid_factory=lambda: UUID(int=12),
+    )
+
+    assert receipt.status == "error"
+    assert events == ["start", "finish"]
+
+
 def test_zero_exit_openhands_controller_error_becomes_infra_receipt(config: NativeOpenHandsConfig) -> None:
     class ControllerErrorUpstream(FakeUpstream):
         def run_with_configs(self, openhands_args, task_args):
@@ -548,12 +578,100 @@ async def test_hud_agent_writes_typed_receipt_to_trace(config: NativeOpenHandsCo
 
 
 @pytest.mark.asyncio
+async def test_projected_steps_are_acknowledged_on_the_event_loop_before_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    config: NativeOpenHandsConfig,
+) -> None:
+    loop_thread = threading.get_ident()
+    record_threads: list[int] = []
+    flush_calls: list[float] = []
+
+    def flush(timeout: float) -> bool:
+        flush_calls.append(timeout)
+        return True
+
+    monkeypatch.setattr("cybergym_hud.native.flush_telemetry", flush)
+
+    expected = NativeReceipt(
+        status="completed",
+        task_id="arvo:10013",
+        server=config.server,
+        run_profile=config.receipt_profile(),
+        agent_id="3" * 32,
+        upstream_returned_agent_id="3" * 32,
+        log_dir="/logs/run",
+    )
+
+    def executor(runtime_config, _binding):
+        assert runtime_config.trace_step_sink is not None
+        runtime_config.trace_step_sink(AgentStep(content="visible native turn"))
+        # The sink blocks until run.record completed on the loop thread.
+        assert len(trace.steps) == 1
+        return expected
+
+    trace = Trace()
+
+    def record(step):
+        record_threads.append(threading.get_ident())
+        trace.record(step)
+
+    run = SimpleNamespace(
+        prompt_text=NativeTaskBinding(task_id="arvo:10013", server=config.server).model_dump_json(),
+        trace=trace,
+        record=record,
+    )
+    await NativeOpenHandsAgent(config, executor=executor)(run)
+
+    assert trace.steps[0].content == "visible native turn"
+    assert all(thread_id == loop_thread for thread_id in record_threads)
+    assert flush_calls == [30.0]
+
+
+@pytest.mark.asyncio
+async def test_false_telemetry_flush_changes_completion_to_error(
+    monkeypatch: pytest.MonkeyPatch,
+    config: NativeOpenHandsConfig,
+) -> None:
+    monkeypatch.setattr("cybergym_hud.native.flush_telemetry", lambda _timeout: False)
+    expected = NativeReceipt(
+        status="completed",
+        task_id="arvo:10013",
+        server=config.server,
+        run_profile=config.receipt_profile(),
+        agent_id="4" * 32,
+        upstream_returned_agent_id="4" * 32,
+        log_dir="/logs/run",
+    )
+    trace = Trace()
+    run = SimpleNamespace(
+        prompt_text=NativeTaskBinding(task_id="arvo:10013", server=config.server).model_dump_json(),
+        trace=trace,
+        record=trace.record,
+    )
+
+    await NativeOpenHandsAgent(config, executor=lambda *_args: expected)(run)
+
+    receipt = NativeReceipt.model_validate_json(trace.content)
+    assert receipt.status == "error"
+    assert "telemetry did not flush" in receipt.error
+    assert trace.status == "error"
+
+
+@pytest.mark.asyncio
 async def test_hud_cancellation_waits_for_the_native_worker_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
     config: NativeOpenHandsConfig,
 ) -> None:
     started = threading.Event()
     release = threading.Event()
     finished = threading.Event()
+    flushed = threading.Event()
+
+    def flush(_timeout: float) -> bool:
+        flushed.set()
+        return True
+
+    monkeypatch.setattr("cybergym_hud.native.flush_telemetry", flush)
 
     def executor(_config, binding):
         started.set()
@@ -588,6 +706,7 @@ async def test_hud_cancellation_waits_for_the_native_worker_lifecycle(
         with pytest.raises(asyncio.CancelledError):
             await task
         assert finished.is_set()
+        assert flushed.is_set()
     finally:
         release.set()
         worker_pool.shutdown(wait=True, cancel_futures=True)
