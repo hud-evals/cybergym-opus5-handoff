@@ -18,6 +18,7 @@ import fcntl
 import hashlib
 import importlib
 import json
+import math
 import os
 import re
 import stat
@@ -28,7 +29,7 @@ from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Protocol, cast
@@ -36,7 +37,7 @@ from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
 import httpx
-from hud.agents.types import AgentStep, ToolStep
+from hud.agents.types import AgentStep, ToolStep, Usage
 from hud.settings import settings
 from hud.telemetry.span import (
     PAYLOAD_ATTRIBUTE,
@@ -45,7 +46,8 @@ from hud.telemetry.span import (
     Span,
     normalize_trace_id,
 )
-from hud.types import Step
+from hud.types import MCPToolCall, MCPToolResult, Step
+from mcp.types import PromptMessage, TextContent
 
 BACKFILL_SCHEMA_VERSION = "1"
 DEFAULT_NAMESPACE = "cybergym-openhands-history-v1"
@@ -53,13 +55,43 @@ TERMINAL_TRACE_STATUSES = frozenset({"completed", "error", "cancelled"})
 _MAX_KEY_LENGTH = 512
 _MAX_BATCH_SPANS = 100
 _MAX_BATCH_BYTES = 4 * 1024 * 1024
-_SECRET_ENV_SUFFIXES = ("_API_KEY", "_TOKEN", "_PASSWORD", "_SECRET")
+_SECRET_ENV_SUFFIXES = (
+    "_API_KEY",
+    "_AUTH",
+    "_AUTHORIZATION",
+    "_COOKIE",
+    "_COOKIES",
+    "_CREDENTIAL",
+    "_CREDENTIALS",
+    "_KEY",
+    "_PASSWORD",
+    "_SECRET",
+    "_TOKEN",
+)
 _EXPLICIT_SECRET_ENV_NAMES = frozenset(
     {
         "ANTHROPIC_API_KEY",
         "DAYTONA_API_KEY",
         "HUD_API_KEY",
         "OPENAI_API_KEY",
+        "GITHUB_TOKEN",
+    }
+)
+_GENERIC_SECRET_ENV_NAMES = frozenset(
+    {
+        "ACCESS_TOKEN",
+        "API_KEY",
+        "AUTH",
+        "AUTHORIZATION",
+        "COOKIE",
+        "COOKIES",
+        "CREDENTIAL",
+        "CREDENTIALS",
+        "PASSWORD",
+        "PRIVATE_KEY",
+        "REFRESH_TOKEN",
+        "SECRET",
+        "TOKEN",
     }
 )
 _SENSITIVE_KEYS = frozenset(
@@ -72,12 +104,20 @@ _SENSITIVE_KEYS = frozenset(
         "authorization",
         "checksum",
         "client_secret",
+        "cookie",
+        "cookies",
+        "credential",
+        "credentials",
         "flag",
+        "github_pat",
+        "github_token",
         "password",
         "passwd",
         "private_key",
         "refresh_token",
         "secret",
+        "session",
+        "session_id",
         "token",
     }
 )
@@ -87,29 +127,55 @@ _SENSITIVE_KEY_SUFFIXES = (
     "_api_key",
     "_checksum",
     "_client_secret",
+    "_cookie",
+    "_cookies",
+    "_credential",
+    "_credentials",
     "_flag",
     "_password",
     "_private_key",
     "_refresh_token",
     "_secret",
+    "_session",
+    "_session_id",
+    "_token",
+)
+_ASSIGNMENT_KEY = (
+    r"(?:api[_-]?key|access[_-]?token|refresh[_-]?token|auth(?:orization)?|bearer|"
+    r"client[_-]?secret|cookie(?:s)?|credential(?:s)?|flag|github[_-]?(?:pat|token)|session(?:[_-]?id)?|"
+    r"password|passwd|private[_-]?key|secret|token|"
+    r"[a-z][a-z0-9_-]*(?:api[_-]?key|auth|cookie|credential|password|secret|token))"
+)
+_QUOTED_ASSIGNMENT = re.compile(
+    rf"(?i)(?P<prefix>(?<![\w-])[\"']?{_ASSIGNMENT_KEY}[\"']?\s*[:=]\s*)"
+    r"(?P<quote>[\"'])(?P<value>[^\"'\r\n]{1,8192})(?P=quote)"
+)
+_BARE_ASSIGNMENT = re.compile(
+    rf"(?i)(?P<prefix>(?<![\w-])[\"']?{_ASSIGNMENT_KEY}[\"']?\s*[:=]\s*)"
+    r"(?P<value>[^\s,;}\]\r\n\"']{1,8192})"
 )
 _STRING_PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
     (
         "authorization",
-        re.compile(r"(?i)\b(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}"),
+        re.compile(r"(?i)\b((?:Bearer|Basic)\s+)[A-Za-z0-9._~+/=-]{8,}"),
         r"\1[REDACTED:authorization]",
     ),
     (
-        "environment_secret",
-        re.compile(
-            r"(?i)\b((?:[A-Z][A-Z0-9_]*_)?(?:API_KEY|ACCESS_TOKEN|REFRESH_TOKEN|PASSWORD|SECRET|FLAG)\s*[:=]\s*)"
-            r"([^\s,;\"']+)"
-        ),
-        r"\1[REDACTED:environment_secret]",
+        "cookie_header",
+        re.compile(r"(?i)\b((?:set-)?cookie\s*:\s*)[^\r\n]{1,16384}"),
+        r"\1[REDACTED:cookie_header]",
+    ),
+    (
+        "jwt",
+        re.compile(r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}"),
+        "[REDACTED:jwt]",
     ),
     (
         "provider_key",
-        re.compile(r"\b(?:sk|sess)-[A-Za-z0-9_-]{16,}\b"),
+        re.compile(
+            r"(?<![A-Za-z0-9])(?:sk-(?:ant-)?|sess-|gh[pousr]_|github_pat_|glpat-|hf_|xox[baprs]-|"
+            r"AIza|AKIA|ASIA)[A-Za-z0-9_-]{12,}"
+        ),
         "[REDACTED:provider_key]",
     ),
     (
@@ -123,6 +189,9 @@ _STRING_PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
         r"\1[REDACTED:url_credentials]@",
     ),
 )
+
+_APPROVED_API_HOSTS = frozenset({"api.hud.ai", "api.beta.hud.ai"})
+_APPROVED_TELEMETRY_HOSTS = frozenset({"telemetry.hud.ai"})
 
 
 class TraceBackfillError(RuntimeError):
@@ -194,16 +263,21 @@ class StepRedactor:
             value
             for name, value in os.environ.items()
             if value
-            and (name in _EXPLICIT_SECRET_ENV_NAMES or name.upper().endswith(_SECRET_ENV_SUFFIXES))
+            and (
+                name.upper() in _EXPLICIT_SECRET_ENV_NAMES
+                or name.upper() in _GENERIC_SECRET_ENV_NAMES
+                or name.upper().endswith(_SECRET_ENV_SUFFIXES)
+            )
         ]
         return cls(values)
 
     def sanitize(self, step: Step) -> tuple[Step, RedactionReport]:
+        step = _whitelist_step(step)
         report = RedactionReport()
-        payload = step.model_dump(mode="json", exclude_none=True)
+        payload = _wire_payload(step)
         sanitized = self._value(payload, report)
         try:
-            rebuilt = type(step).model_validate(sanitized)
+            rebuilt = _step_from_wire_payload(sanitized)
         except Exception as exc:
             raise TraceBackfillError(
                 f"redaction made {type(step).__name__} invalid ({type(exc).__name__})"
@@ -215,7 +289,14 @@ class StepRedactor:
             report.record("sensitive_key")
             return "[REDACTED:sensitive_key]"
         if isinstance(value, dict):
-            return {str(item_key): self._value(item, report, key=str(item_key)) for item_key, item in value.items()}
+            sanitized: dict[str, Any] = {}
+            for item_key, item in value.items():
+                original_key = str(item_key)
+                safe_key = self._text(original_key, report)
+                if safe_key in sanitized:
+                    raise TraceBackfillError("redaction collapsed distinct mapping keys")
+                sanitized[safe_key] = self._value(item, report, key=original_key)
+            return sanitized
         if isinstance(value, list):
             return [self._value(item, report) for item in value]
         if isinstance(value, str):
@@ -232,6 +313,19 @@ class StepRedactor:
         for category, pattern, replacement in _STRING_PATTERNS:
             rendered, count = pattern.subn(replacement, rendered)
             report.record(category, count)
+        rendered, count = _QUOTED_ASSIGNMENT.subn(
+            lambda match: (
+                f"{match.group('prefix')}{match.group('quote')}"
+                f"[REDACTED:assignment]{match.group('quote')}"
+            ),
+            rendered,
+        )
+        report.record("assignment", count)
+        rendered, count = _BARE_ASSIGNMENT.subn(
+            lambda match: f"{match.group('prefix')}[REDACTED:assignment]",
+            rendered,
+        )
+        report.record("assignment", count)
         return rendered
 
 
@@ -299,11 +393,10 @@ def build_backfill_plan(
     if not keyed_steps:
         raise TraceBackfillError("mapper returned no HUD steps")
     active_redactor = redactor or StepRedactor.from_environment()
-    spans: list[dict[str, Any]] = []
-    expectations: list[EventExpectation] = []
     combined_report = RedactionReport()
     seen_keys: set[str] = set()
     seen_span_ids: set[str] = set()
+    whitelisted_items: list[KeyedStep] = []
 
     for item in keyed_steps:
         _validate_key(item.key)
@@ -312,14 +405,31 @@ def build_backfill_plan(
         seen_keys.add(item.key)
         if not isinstance(item.step, Step):
             raise TraceBackfillError("mapper returned a value that is not a HUD Step")
+        whitelisted_step = _whitelist_step(item.step)
+        _validate_step(whitelisted_step)
+        whitelisted_items.append(KeyedStep(item.key, whitelisted_step))
+
+    # Validate the original selected values before redaction can intentionally
+    # collapse sensitive strings to the same placeholder.
+    _validate_topology(whitelisted_items)
+    sanitized_items: list[KeyedStep] = []
+    for item in whitelisted_items:
         sanitized_step, report = active_redactor.sanitize(item.step)
         combined_report.counts.update(report.counts)
         _validate_step(sanitized_step)
+        sanitized_items.append(KeyedStep(item.key, sanitized_step))
+
+    _validate_topology(sanitized_items)
+    sanitized_items = _strictly_monotonic_steps(sanitized_items)
+    spans: list[dict[str, Any]] = []
+    expectations: list[EventExpectation] = []
+    for item in sanitized_items:
+        sanitized_step = item.step
         span_id = deterministic_span_id(canonical_trace_id, namespace, item.key)
         if span_id in seen_span_ids:
             raise TraceBackfillError("deterministic step IDs collided; choose a different namespace")
         seen_span_ids.add(span_id)
-        payload = sanitized_step.model_dump(mode="json", exclude_none=True)
+        payload = _wire_payload(sanitized_step)
         span = Span(
             name=f"step.{sanitized_step.source}",
             trace_id=normalize_trace_id(canonical_trace_id),
@@ -379,8 +489,14 @@ class HTTPBackfillTransport:
         if not api_key:
             raise TraceBackfillError("HUD_API_KEY is required for --apply")
         self._api_root = _versioned_api_root(api_url)
-        self._telemetry_root = _safe_http_root(telemetry_url, label="HUD telemetry URL")
+        self._telemetry_root = _safe_hud_root(
+            telemetry_url,
+            label="HUD telemetry URL",
+            approved_hosts=_APPROVED_TELEMETRY_HOSTS,
+        )
         self._headers = {"Authorization": f"Bearer {api_key}"}
+        if client is not None and client.follow_redirects:
+            raise TraceBackfillError("HUD backfill HTTP client may not follow redirects")
         self._client = client or httpx.Client(timeout=timeout_seconds)
         self._owns_client = client is None
 
@@ -563,9 +679,9 @@ def apply_backfill(
         initial = _fetch_remote_snapshot(transport, plan)
         if initial.status not in TERMINAL_TRACE_STATUSES:
             raise TraceBackfillError(f"refusing telemetry backfill for nonterminal trace status {initial.status!r}")
-        if initial.wrong_kind_ids:
+        if initial.wrong_kind_ids or initial.wrong_order:
             raise TraceBackfillError(
-                "remote trace has deterministic event IDs with unexpected kinds or visible payloads"
+                "remote trace has deterministic event IDs with unexpected order, kinds, or visible payloads"
             )
 
         now = _now()
@@ -701,6 +817,7 @@ class _RemoteSnapshot:
     present_ids: frozenset[str]
     missing_ids: frozenset[str]
     wrong_kind_ids: frozenset[str]
+    wrong_order: bool
     planned_counts: Mapping[str, int]
 
 
@@ -727,6 +844,16 @@ def _fetch_remote_snapshot(transport: BackfillTransport, plan: BackfillPlan) -> 
     expectation_by_id = {expectation.span_id: expectation for expectation in plan.expectations}
     present = frozenset(expectation_by_id).intersection(by_id)
     missing = frozenset(expectation_by_id).difference(by_id)
+    remote_order = tuple(
+        cast("str", event["id"])
+        for event in events
+        if isinstance(event, dict)
+        and isinstance(event.get("id"), str)
+        and event.get("id") in expectation_by_id
+    )
+    expected_present_order = tuple(span_id for span_id in plan.span_ids if span_id in present)
+    is_prefix = expected_present_order == plan.span_ids[: len(expected_present_order)]
+    wrong_order = remote_order != expected_present_order or not is_prefix
     wrong: set[str] = set()
     counts: Counter[str] = Counter()
     for span_id in present:
@@ -758,6 +885,7 @@ def _fetch_remote_snapshot(transport: BackfillTransport, plan: BackfillPlan) -> 
         present_ids=frozenset(present),
         missing_ids=missing,
         wrong_kind_ids=frozenset(wrong),
+        wrong_order=wrong_order,
         planned_counts=dict(counts),
     )
 
@@ -774,7 +902,7 @@ def _wait_for_complete_snapshot(
         snapshot = _fetch_remote_snapshot(transport, plan)
         if snapshot.status not in TERMINAL_TRACE_STATUSES:
             raise TraceBackfillError("trace left terminal status during backfill verification")
-        if snapshot.wrong_kind_ids:
+        if snapshot.wrong_kind_ids or snapshot.wrong_order:
             raise TraceBackfillError("HUD projected deterministic event IDs with unexpected content shape")
         if not snapshot.missing_ids:
             _require_complete_snapshot(snapshot, plan)
@@ -785,7 +913,7 @@ def _wait_for_complete_snapshot(
 
 
 def _require_complete_snapshot(snapshot: _RemoteSnapshot, plan: BackfillPlan) -> None:
-    if snapshot.missing_ids or snapshot.wrong_kind_ids:
+    if snapshot.missing_ids or snapshot.wrong_kind_ids or snapshot.wrong_order:
         raise TraceBackfillError("remote backfill projection is incomplete")
     expected = Counter(expectation.kind for expectation in plan.expectations)
     observed = Counter(snapshot.planned_counts)
@@ -846,6 +974,217 @@ def _validate_key(key: str) -> None:
         raise TraceBackfillError("stable mapper keys may not contain control characters")
 
 
+def _whitelist_step(step: Step) -> Step:
+    """Copy only display-grade CyberGym channels and reject hidden payloads."""
+
+    if step.step_id is not None or step.task_call is not None or step.error is not None or step.extra:
+        raise TraceBackfillError("mapper step contains forbidden metadata, task state, extra, or errors")
+    if step.source == "user":
+        if isinstance(step, (AgentStep, ToolStep)):
+            raise TraceBackfillError("user-sourced mapper values must be plain Step objects")
+        messages: list[PromptMessage] = []
+        if not step.messages:
+            raise TraceBackfillError("mapper produced a blank HUD user message")
+        for message in step.messages:
+            if not isinstance(message, PromptMessage) or message.role != "user":
+                raise TraceBackfillError("user mapper messages must be user-role PromptMessage objects")
+            if _model_extras(message):
+                raise TraceBackfillError("user PromptMessage contains unknown metadata")
+            content = message.content
+            if not isinstance(content, TextContent):
+                raise TraceBackfillError("user mapper messages may contain text only")
+            if content.annotations is not None or content.meta is not None or _model_extras(content):
+                raise TraceBackfillError("user text content contains annotations or unknown metadata")
+            if not content.text.strip():
+                raise TraceBackfillError("mapper produced a blank HUD user message")
+            messages.append(
+                PromptMessage(role="user", content=TextContent(type="text", text=content.text))
+            )
+        return Step(
+            source="user",
+            messages=messages,
+            started_at=step.started_at,
+            ended_at=step.ended_at,
+        )
+    if step.source == "agent":
+        if not isinstance(step, AgentStep):
+            raise TraceBackfillError("agent-sourced mapper values must be AgentStep objects")
+        if (
+            step.messages
+            or step.raw is not None
+            or step.sample is not None
+            or step.refusal is not None
+            or step.citations
+        ):
+            raise TraceBackfillError(
+                "agent mapper step contains forbidden messages, raw/sample, refusal, or citations"
+            )
+        calls = [_whitelist_call(call, label="agent tool call") for call in step.tool_calls]
+        usage = _whitelist_usage(step.usage)
+        return AgentStep(
+            content=step.content,
+            reasoning=step.reasoning,
+            tool_calls=calls,
+            model=step.model,
+            usage=usage,
+            done=step.done,
+            finish_reason=step.finish_reason,
+            started_at=step.started_at,
+            ended_at=step.ended_at,
+        )
+    if step.source == "tool":
+        if not isinstance(step, ToolStep) or step.call is None or step.result is None:
+            raise TraceBackfillError("tool-sourced mapper values must be complete ToolStep objects")
+        if step.messages:
+            raise TraceBackfillError("tool mapper step contains forbidden messages")
+        call = _whitelist_call(step.call, label="tool result call")
+        result = step.result
+        if result.meta is not None or result.structuredContent is not None or _model_extras(result):
+            raise TraceBackfillError("tool result contains structured, meta, or unknown extra content")
+        if result.call_id is not None and result.call_id != call.id:
+            raise TraceBackfillError("tool result call_id does not match its call")
+        if not result.content:
+            raise TraceBackfillError("tool result must contain text content")
+        content: list[TextContent] = []
+        for item in result.content:
+            if not isinstance(item, TextContent):
+                raise TraceBackfillError("tool results may contain text content only")
+            if item.annotations is not None or item.meta is not None or _model_extras(item):
+                raise TraceBackfillError("tool result text contains annotations or unknown metadata")
+            content.append(TextContent(type="text", text=item.text))
+        return ToolStep(
+            call=call,
+            result=MCPToolResult(content=content, isError=bool(result.isError)),
+            started_at=step.started_at,
+            ended_at=step.ended_at,
+        )
+    raise TraceBackfillError("historical backfill accepts only user, agent, and tool steps")
+
+
+def _whitelist_call(call: MCPToolCall, *, label: str) -> MCPToolCall:
+    if not isinstance(call.id, str) or not call.id.strip() or not isinstance(call.name, str) or not call.name.strip():
+        raise TraceBackfillError(f"{label} must have nonblank string id and name")
+    if not isinstance(call.arguments, dict):
+        raise TraceBackfillError(f"{label} arguments must be parsed JSON objects")
+    if call.task is not None or call.meta is not None or call.annotation is not None or _model_extras(call):
+        raise TraceBackfillError(f"{label} contains task, meta, annotation, or unknown metadata")
+    if call.provider_name not in {None, call.name}:
+        raise TraceBackfillError(f"{label} provider metadata disagrees with its public name")
+    _validate_json_value(call.arguments, label=f"{label} arguments")
+    return MCPToolCall(id=call.id, name=call.name, arguments=call.arguments)
+
+
+def _whitelist_usage(usage: Usage | None) -> Usage | None:
+    if usage is None:
+        return None
+    if _model_extras(usage):
+        raise TraceBackfillError("agent usage contains unknown metadata")
+    values = {
+        "prompt_tokens": usage.prompt_tokens,
+        "completion_tokens": usage.completion_tokens,
+        "cached_tokens": usage.cached_tokens,
+        "cost_usd": usage.cost_usd,
+        "llm_call_count": usage.llm_call_count,
+    }
+    for name, value in values.items():
+        if value is not None and (not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0):
+            raise TraceBackfillError(f"agent usage {name} must be a nonnegative number")
+        if isinstance(value, float) and not math.isfinite(value):
+            raise TraceBackfillError(f"agent usage {name} must be finite")
+    return Usage(**values)
+
+
+def _model_extras(value: Any) -> Mapping[str, Any]:
+    extras = getattr(value, "__pydantic_extra__", None)
+    return extras if isinstance(extras, Mapping) else {}
+
+
+def _validate_json_value(value: Any, *, label: str) -> None:
+    if value is None or isinstance(value, (str, bool, int)):
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise TraceBackfillError(f"{label} contains a non-finite number")
+        return
+    if isinstance(value, list):
+        for item in value:
+            _validate_json_value(item, label=label)
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TraceBackfillError(f"{label} contains a non-string mapping key")
+            _validate_json_value(item, label=label)
+        return
+    raise TraceBackfillError(f"{label} contains a non-JSON value")
+
+
+def _wire_payload(step: Step) -> dict[str, Any]:
+    common: dict[str, Any] = {
+        "source": step.source,
+        "started_at": step.started_at,
+        "ended_at": step.ended_at,
+    }
+    if step.source == "user":
+        common["messages"] = [
+            {"role": "user", "content": {"type": "text", "text": message.content.text}}
+            for message in step.messages
+            if isinstance(message.content, TextContent)
+        ]
+        return common
+    if isinstance(step, AgentStep):
+        common.update(
+            {
+                "content": step.content,
+                "reasoning": step.reasoning,
+                "tool_calls": [
+                    {"id": call.id, "name": call.name, "arguments": call.arguments}
+                    for call in step.tool_calls
+                ],
+                "done": step.done,
+                "finish_reason": step.finish_reason,
+                "model": step.model,
+                "usage": (
+                    step.usage.model_dump(mode="json", exclude_none=True) if step.usage is not None else None
+                ),
+            }
+        )
+        return {key: value for key, value in common.items() if value is not None}
+    if isinstance(step, ToolStep) and step.call is not None and step.result is not None:
+        common.update(
+            {
+                "call": {
+                    "id": step.call.id,
+                    "name": step.call.name,
+                    "arguments": step.call.arguments,
+                },
+                "result": {
+                    "content": [
+                        {"type": "text", "text": item.text}
+                        for item in step.result.content
+                        if isinstance(item, TextContent)
+                    ],
+                    "isError": bool(step.result.isError),
+                },
+            }
+        )
+        return common
+    raise TraceBackfillError("could not serialize unsupported mapper step")
+
+
+def _step_from_wire_payload(payload: Any) -> Step:
+    if not isinstance(payload, dict):
+        raise TraceBackfillError("redacted mapper payload is not an object")
+    source = payload.get("source")
+    if source == "user":
+        return Step.model_validate(payload)
+    if source == "agent":
+        return AgentStep.model_validate(payload)
+    if source == "tool":
+        return ToolStep.model_validate(payload)
+    raise TraceBackfillError("redacted mapper payload has an unsupported source")
+
+
 def _validate_step(step: Step) -> None:
     if not step.started_at or not step.ended_at:
         raise TraceBackfillError("historical mapper steps must carry deterministic start and end timestamps")
@@ -870,6 +1209,69 @@ def _validate_step(step: Step) -> None:
             raise TraceBackfillError("mapper tool arguments must be parsed JSON objects")
     elif step.source == "user" and not _has_visible_user_text(step):
         raise TraceBackfillError("mapper produced a blank HUD user message")
+
+
+def _validate_topology(items: Sequence[KeyedStep]) -> None:
+    if not items or items[0].step.source != "user":
+        raise TraceBackfillError("historical transcript must begin with exactly one user step")
+    if sum(item.step.source == "user" for item in items) != 1:
+        raise TraceBackfillError("historical transcript must contain exactly one first user step")
+    pending: dict[str, MCPToolCall] = {}
+    seen_calls: set[str] = set()
+    terminal_seen = False
+    for index, item in enumerate(items):
+        step = item.step
+        if isinstance(step, AgentStep):
+            if pending:
+                raise TraceBackfillError("assistant turn arrived with pending tool results")
+            if step.done:
+                if terminal_seen or index != len(items) - 1 or step.tool_calls:
+                    raise TraceBackfillError("terminal done assistant must be unique, last, and have no tool calls")
+                terminal_seen = True
+            for call in step.tool_calls:
+                if call.id in seen_calls:
+                    raise TraceBackfillError("historical transcript contains a duplicate tool call id")
+                seen_calls.add(call.id)
+                pending[call.id] = call
+        elif isinstance(step, ToolStep):
+            if step.call is None or step.result is None or step.call.id not in pending:
+                raise TraceBackfillError("historical transcript contains an orphan tool result")
+            expected = pending.pop(step.call.id)
+            if step.call.name != expected.name or _canonical_json(step.call.arguments) != _canonical_json(
+                expected.arguments
+            ):
+                raise TraceBackfillError("tool result call does not match its prior assistant call")
+        elif step.source != "user":
+            raise TraceBackfillError("historical transcript contains an unsupported step source")
+    if pending:
+        raise TraceBackfillError("historical transcript ends with pending tool results")
+    if not terminal_seen or not isinstance(items[-1].step, AgentStep):
+        raise TraceBackfillError("historical transcript must end with a terminal done assistant")
+
+
+def _strictly_monotonic_steps(items: Sequence[KeyedStep]) -> list[KeyedStep]:
+    normalized: list[KeyedStep] = []
+    previous_end: datetime | None = None
+    tick = timedelta(microseconds=1)
+    for item in items:
+        started = _parse_timestamp(cast("str", item.step.started_at))
+        ended = _parse_timestamp(cast("str", item.step.ended_at))
+        try:
+            if previous_end is not None and started <= previous_end:
+                started = previous_end + tick
+            if ended <= started:
+                ended = started + tick
+        except OverflowError:
+            raise TraceBackfillError("historical mapper timestamps cannot be normalized safely") from None
+        step = item.step.model_copy(
+            update={
+                "started_at": started.isoformat(timespec="microseconds"),
+                "ended_at": ended.isoformat(timespec="microseconds"),
+            }
+        )
+        normalized.append(KeyedStep(item.key, cast("Step", step)))
+        previous_end = ended
+    return normalized
 
 
 def _parse_timestamp(value: str) -> datetime:
@@ -1046,7 +1448,7 @@ def _now() -> str:
 
 
 def _versioned_api_root(value: str) -> str:
-    root = _safe_http_root(value, label="HUD API URL")
+    root = _safe_hud_root(value, label="HUD API URL", approved_hosts=_APPROVED_API_HOSTS)
     parsed = urlsplit(root)
     path = parsed.path
     if not path.endswith("/v2"):
@@ -1054,10 +1456,21 @@ def _versioned_api_root(value: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
 
-def _safe_http_root(value: str, *, label: str) -> str:
+def _safe_hud_root(value: str, *, label: str, approved_hosts: frozenset[str]) -> str:
     parsed = urlsplit(value.strip())
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password:
-        raise TraceBackfillError(f"{label} must be an HTTP(S) root without credentials")
+    try:
+        port = parsed.port
+    except ValueError:
+        raise TraceBackfillError(f"{label} contains an invalid port") from None
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or port is not None
+        or parsed.hostname not in approved_hosts
+    ):
+        raise TraceBackfillError(f"{label} must use an approved HTTPS HUD origin without credentials or ports")
     if parsed.query or parsed.fragment:
         raise TraceBackfillError(f"{label} may not contain a query or fragment")
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
@@ -1092,6 +1505,16 @@ def _assert_expected_counts(plan: BackfillPlan, args: argparse.Namespace) -> Non
         raise TraceBackfillError(f"mapper event counts do not match operator expectations: {drift}")
 
 
+def _assert_apply_count_gate(args: argparse.Namespace) -> None:
+    values = (args.expect_user, args.expect_agent, args.expect_tool)
+    if args.apply and any(value is None for value in values):
+        raise TraceBackfillError(
+            "--apply requires --expect-user, --expect-agent, and --expect-tool"
+        )
+    if any(value is not None and value < 0 for value in values):
+        raise TraceBackfillError("operator expected event counts may not be negative")
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Dry-run or apply a deterministic historical HUD trace backfill")
     parser.add_argument("--trace-id", required=True)
@@ -1123,6 +1546,7 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        _assert_apply_count_gate(args)
         if not args.source.exists() or args.source.is_symlink():
             raise TraceBackfillError("mapper source must exist and may not be a symlink")
         mapper = _load_mapper(args.mapper)
