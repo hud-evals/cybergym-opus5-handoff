@@ -586,13 +586,14 @@ async def test_hud_agent_writes_typed_receipt_to_trace(
         runtime_config.trace_projection_sink((projected,))
         return expected
 
-    monkeypatch.setattr(
-        "cybergym_hud.native.import_openhands_trace",
-        lambda *_args, **_kwargs: TraceImportResult(
+    def import_without_workspace_read(*_args, **kwargs):
+        assert "workspace_submit" not in kwargs
+        return TraceImportResult(
             steps=(projected,),
             metadata=build_trace_import_metadata((projected,), status="completed"),
-        ),
-    )
+        )
+
+    monkeypatch.setattr("cybergym_hud.native.import_openhands_trace", import_without_workspace_read)
 
     trace = Trace()
     run = SimpleNamespace(

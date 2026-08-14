@@ -758,13 +758,13 @@ async def _run_and_record(
             )
             live_metadata["saved_trajectory_reconciled"] = trajectory_exists
             if trajectory_exists:
-                workspace_submit = None
-                if projection_receipt.agent_id:
-                    run_name = f"{projection_receipt.task_id.replace(':', '_')}-{projection_receipt.agent_id}"
-                    workspace_submit = config.tmp_dir / run_name / "workspace" / "submit.sh"
+                # The OpenHands args already bind task_id and exact-redact
+                # server, agent_id, and checksum.  The runtime workspace is correctly
+                # root-owned and can be unreadable by the unprivileged host
+                # controller, so do not make transcript reconciliation depend
+                # on rereading its generated submit.sh.
                 imported = import_openhands_trace(
                     projection_receipt,
-                    workspace_submit=workspace_submit,
                     redactions=(
                         *runtime_secret_values(),
                         *(value for value in (config.llm_api_key,) if value),
