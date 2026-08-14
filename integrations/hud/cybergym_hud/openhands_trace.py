@@ -138,6 +138,10 @@ class ProjectedStep:
 class TraceImportResult:
     steps: tuple[ProjectedStep, ...]
     metadata: dict[str, Any]
+    # Internal-only witness used to bind a deferred oversized live event to
+    # the pinned sanitized trajectory.  It is deliberately not serialized in
+    # HUD metadata.
+    source_event_ids: frozenset[str] = frozenset()
 
 
 class _Redactor:
@@ -938,11 +942,12 @@ def import_openhands_trace(
     if not isinstance(raw_events, list) or not raw_events:
         raise TraceImportError("OpenHands trajectory must be a nonempty event list")
     projector = OpenHandsEventProjector(redactions=all_redactions)
-    first_visible = projector.decode(raw_events[0], origin="trajectory")
+    decoded_events = tuple(projector.decode(raw_event, origin="trajectory") for raw_event in raw_events)
+    first_visible = decoded_events[0]
     if first_visible is None or first_visible.kind != "user" or first_visible.text != OG_PROMPT:
         raise TraceImportError("OpenHands first user event is not the pinned OG prompt")
     steps = projector.project(
-        raw_events,
+        decoded_events,
         final=receipt.status == "completed",
         skip_initial_user_prompt=None if include_initial_user_prompt else OG_PROMPT,
     )
@@ -960,7 +965,11 @@ def import_openhands_trace(
         steps,
         status="completed" if receipt.status == "completed" else "partial_error",
     )
-    return TraceImportResult(steps=steps, metadata=metadata)
+    return TraceImportResult(
+        steps=steps,
+        metadata=metadata,
+        source_event_ids=frozenset(event.event_id for event in decoded_events),
+    )
 
 
 def map_openhands_receipt(path: Path) -> tuple[ProjectedStep, ...]:

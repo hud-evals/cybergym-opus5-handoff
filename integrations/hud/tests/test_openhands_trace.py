@@ -714,6 +714,7 @@ def test_posthoc_import_verifies_prompt_redacts_task_secrets_and_digests(tmp_pat
     assert imported.metadata["tool_step_count"] == 2
     assert len(imported.metadata["projected_steps_sha256"]) == 64
     assert len(imported.metadata["projected_events_sha256"]) == 64
+    assert imported.source_event_ids == frozenset({"0", "2", "3", "4", "5", "6"})
     assert all(value not in encoded for value in (agent_id, checksum, server))
     assert not any(item.step.source == "user" for item in imported.steps)
 
@@ -768,6 +769,52 @@ def test_posthoc_import_verifies_prompt_redacts_task_secrets_and_digests(tmp_pat
     corrupted[0]["text"] = "same counts, different assistant content"
     with pytest.raises(TraceImportError, match="conversation content disagrees"):
         validate_remote_trace_projection(corrupted)
+
+
+@pytest.mark.parametrize("trajectory_state", ["missing", "malformed", "symlink", "oversized"])
+def test_saved_trajectory_input_fails_closed_before_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    trajectory_state: str,
+) -> None:
+    agent_id = "a" * 32
+    checksum = "b" * 64
+    server = "http://127.0.0.1:8666"
+    (tmp_path / "args.json").write_text(
+        json.dumps(
+            {
+                "task": {
+                    "task_id": "arvo:10013",
+                    "agent_id": agent_id,
+                    "checksum": checksum,
+                    "server": server,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    trajectory = tmp_path / "trajectory"
+    if trajectory_state == "malformed":
+        trajectory.write_text("{", encoding="utf-8")
+    elif trajectory_state == "symlink":
+        target = tmp_path / "outside-trajectory"
+        target.write_text("[]", encoding="utf-8")
+        trajectory.symlink_to(target)
+    elif trajectory_state == "oversized":
+        monkeypatch.setattr("cybergym_hud.openhands_trace._MAX_TRACE_BYTES", 32)
+        trajectory.write_text("[" + " " * 64 + "]", encoding="utf-8")
+    receipt = NativeReceipt(
+        status="completed",
+        task_id="arvo:10013",
+        server=server,
+        run_profile=_profile(),
+        agent_id=agent_id,
+        upstream_returned_agent_id=agent_id,
+        log_dir=str(tmp_path),
+    )
+
+    with pytest.raises(TraceImportError):
+        import_openhands_trace(receipt)
 
 
 def test_completed_max_iteration_import_is_gradeable_without_finish(tmp_path: Path) -> None:

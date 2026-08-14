@@ -114,6 +114,15 @@ omitted: they are controller-owned memory boundaries, not provider assistant
 responses or tool calls. A pinned recoverable `ErrorObservation` is exported as
 the failed result of its provider tool call only when its response, call ID, and
 action cause all match; every other action/observation mismatch fails closed.
+Live event files remain capped at 16 MiB so browser DOM/accessibility-tree and
+screenshot payloads are never materialized by the HUD tailer. If a pinned raw
+event exceeds that cap, live decoding stops at its numeric event ID. After the
+worker exits, only OpenHands' bounded, sanitized saved `trajectory` may supply
+the missing suffix: it must contain that exact event ID, preserve every live
+step key and payload fingerprint, and leave a contiguous regular-file event
+suffix unchanged during reconciliation. Only previously unrecorded steps are
+then emitted. A missing, malformed, oversized, symlinked, shorter, or divergent
+saved trajectory fails closed.
 Exact runtime/task secrets and boundary-safe credential/flag patterns are
 redacted, and an import failure marks the trace as infrastructure error without
 changing the native receipt or grader result.

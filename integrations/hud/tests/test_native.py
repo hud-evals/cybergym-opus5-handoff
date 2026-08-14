@@ -16,6 +16,7 @@ from hud.eval.file_tracking import FileTrackingClient
 from hud.telemetry.context import set_trace_context
 from hud.types import Trace
 
+from cybergym_hud.contract import OG_PROMPT
 from cybergym_hud.env import build_env
 from cybergym_hud.native import (
     NativeOpenHandsAgent,
@@ -23,6 +24,7 @@ from cybergym_hud.native import (
     NativeOpenHandsConfig,
     _classify_error_reasons,
     _controller_termination,
+    _make_openhands_trace_tailer,
     _OpenHandsSubprocessProxy,
     execute_upstream_openhands,
 )
@@ -340,6 +342,71 @@ def test_trace_tailer_finalizes_after_upstream_error(
 
     assert receipt.status == "error"
     assert events == ["start", "finish:False"]
+
+
+@pytest.mark.parametrize("final", [True, False])
+def test_native_tailer_saved_fallback_uses_strict_importer_and_retains_event_ids(
+    config: NativeOpenHandsConfig,
+    final: bool,
+) -> None:
+    agent_id = "a" * 32
+    checksum = "b" * 64
+    binding = NativeTaskBinding(task_id="arvo:10013", server=config.server)
+    receipt_dir = config.log_dir / f"arvo_10013-{agent_id}"
+    receipt_dir.mkdir(parents=True)
+    (receipt_dir / "args.json").write_text(
+        json.dumps(
+            {
+                "task": {
+                    "task_id": binding.task_id,
+                    "agent_id": agent_id,
+                    "checksum": checksum,
+                    "server": binding.server,
+                },
+                "agent_args": {"llm": {"api_key": None}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (receipt_dir / "trajectory").write_text(
+        json.dumps(
+            [
+                {
+                    "id": 0,
+                    "timestamp": "2026-01-02T03:04:00Z",
+                    "source": "user",
+                    "action": "message",
+                    "args": {"content": OG_PROMPT},
+                },
+                {
+                    "id": 7,
+                    "timestamp": "2026-01-02T03:04:01Z",
+                    "source": "agent",
+                    "action": "message",
+                    "tool_call_metadata": None,
+                    "args": {"content": "sanitized assistant turn"},
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    configured = replace(config, trace_step_sink=lambda _step: None)
+    tailer = _make_openhands_trace_tailer(
+        configured,
+        receipt_dir,
+        binding=binding,
+        run_profile=config.receipt_profile(),
+        agent_id=agent_id,
+        exact_redactions=(agent_id, checksum, binding.server),
+    )
+
+    assert tailer._saved_projection_loader is not None
+    saved = tailer._saved_projection_loader(final)
+
+    assert saved.source_event_ids == frozenset({"0", "7"})
+    assert len(saved.steps) == 1
+    assert saved.steps[0].key == "agent-message:7"
+    assert saved.steps[0].step.content == "sanitized assistant turn"
 
 
 def test_zero_exit_openhands_controller_error_becomes_infra_receipt(config: NativeOpenHandsConfig) -> None:

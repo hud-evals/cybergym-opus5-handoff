@@ -34,7 +34,7 @@ from .openhands_trace import (
     runtime_secret_values,
 )
 from .receipt import NativeReceipt, NativeRunProfile, NativeTaskBinding, normalize_server
-from .trace_tail import OpenHandsEventTailer, OpenHandsTraceError
+from .trace_tail import OpenHandsEventTailer, OpenHandsTraceError, SavedTrajectoryProjection
 from .upstream import require_upstream_agent_checkout
 
 CAMPAIGN_RUNTIME_NANO_CPUS = 4_000_000_000
@@ -379,6 +379,9 @@ def _make_openhands_trace_tailer(
     config: NativeOpenHandsConfig,
     receipt_log_dir: Path,
     *,
+    binding: NativeTaskBinding,
+    run_profile: NativeRunProfile,
+    agent_id: str,
     exact_redactions: tuple[str, ...],
 ) -> OpenHandsEventTailer:
     """Build the live bridge lazily so direct receipt-only calls stay cheap."""
@@ -387,10 +390,36 @@ def _make_openhands_trace_tailer(
         raise ValueError("OpenHands trace tailer requires a HUD step sink")
     from .openhands_trace import OpenHandsEventProjector
 
+    redactions = _trace_redactions(config, exact=exact_redactions)
+
+    def load_saved_projection(final: bool) -> SavedTrajectoryProjection:
+        # The pinned saved ``trajectory`` omits browser DOM, accessibility
+        # trees, and screenshots.  It is therefore the only permitted fallback
+        # when a raw live event exceeds the bounded event-file reader.
+        receipt = NativeReceipt(
+            status="completed" if final else "error",
+            task_id=binding.task_id,
+            server=binding.server,
+            run_profile=run_profile,
+            agent_id=agent_id,
+            upstream_returned_agent_id=agent_id if final else None,
+            log_dir=str(receipt_log_dir),
+            error=None if final else "private upstream rollout error",
+        )
+        imported = import_openhands_trace(
+            receipt,
+            redactions=redactions,
+        )
+        return SavedTrajectoryProjection(
+            steps=imported.steps,
+            source_event_ids=imported.source_event_ids,
+        )
+
     return OpenHandsEventTailer(
         receipt_log_dir,
-        projector=OpenHandsEventProjector(redactions=_trace_redactions(config, exact=exact_redactions)),
+        projector=OpenHandsEventProjector(redactions=redactions),
         sink=config.trace_step_sink,
+        saved_projection_loader=load_saved_projection,
         project_kwargs={
             "origin": "event_store",
             "skip_initial_user_prompt": OG_PROMPT,
@@ -515,6 +544,9 @@ def execute_upstream_openhands(
                 trace_tailer = _make_openhands_trace_tailer(
                     config,
                     receipt_log_dir,
+                    binding=binding,
+                    run_profile=run_profile,
+                    agent_id=agent_id,
                     exact_redactions=(agent_id, checksum, binding.server),
                 )
                 trace_tailer.start()

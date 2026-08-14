@@ -15,6 +15,7 @@ from hud.types import Step
 from cybergym_hud.trace_tail import (
     OpenHandsEventTailer,
     OpenHandsTraceError,
+    SavedTrajectoryProjection,
 )
 
 
@@ -67,6 +68,16 @@ def _event_dir(receipt_dir: Path, session: str = "session") -> Path:
 
 def _write_event(path: Path, **payload: object) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _saved_projection(
+    *items: tuple[str, str],
+    source_event_ids: frozenset[str] = frozenset(),
+) -> SavedTrajectoryProjection:
+    return SavedTrajectoryProjection(
+        steps=tuple(FakeProjectedStep(key=key, step=AgentStep(content=text)) for key, text in items),
+        source_event_ids=source_event_ids,
+    )
 
 
 def _wait_until(predicate, *, timeout: float = 2.0) -> None:
@@ -156,6 +167,297 @@ def test_repeated_reconciliation_never_reemits_a_step(tmp_path: Path) -> None:
     time.sleep(0.05)
     tailer.finish()
     assert len(emitted) == 1
+
+
+def test_oversized_event_is_never_read_and_saved_projection_supplies_suffix(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    emitted = []
+    events_dir = _event_dir(tmp_path)
+    _write_event(events_dir / "0.json", kind="agent", key="zero", text="x" * 100, ready=True)
+    _write_event(events_dir / "1.json", kind="agent", key="one", text="suffix", ready=True)
+
+    def forbidden_read(*_args, **_kwargs):
+        raise AssertionError("oversized raw event or its suffix was read")
+
+    monkeypatch.setattr("cybergym_hud.trace_tail.os.read", forbidden_read)
+    saved = _saved_projection(
+        ("zero", "sanitized zero"),
+        ("one", "sanitized one"),
+        source_event_ids=frozenset({"0", "1"}),
+    )
+    tailer = OpenHandsEventTailer(
+        tmp_path,
+        projector=FakeProjector(),
+        sink=emitted.append,
+        saved_projection_loader=lambda _final: saved,
+        poll_interval=0.01,
+        max_event_bytes=64,
+    )
+    tailer.start()
+    tailer.finish()
+
+    assert [step.content for step in emitted] == ["sanitized zero", "sanitized one"]
+    assert tailer.final_event_count == 2
+    assert tailer.final_step_count == 2
+    assert [item.key for item in tailer.projection_snapshot()] == ["zero", "one"]
+
+
+@pytest.mark.parametrize("final_projection", [True, False])
+def test_oversized_fallback_preserves_live_prefix_and_emits_only_missing_suffix(
+    tmp_path: Path,
+    final_projection: bool,
+) -> None:
+    emitted = []
+    loader_calls: list[bool] = []
+    events_dir = _event_dir(tmp_path)
+    _write_event(events_dir / "0.json", kind="agent", key="zero", text="live zero", ready=True)
+    _write_event(events_dir / "1.json", kind="agent", key="one", text="x" * 300, ready=True)
+    _write_event(events_dir / "2.json", kind="agent", key="two", text="must not be read live", ready=True)
+    saved = _saved_projection(
+        ("zero", "live zero"),
+        ("one", "sanitized one"),
+        ("two", "sanitized two"),
+        source_event_ids=frozenset({"0", "1", "2"}),
+    )
+
+    def load(final: bool) -> SavedTrajectoryProjection:
+        loader_calls.append(final)
+        return saved
+
+    tailer = OpenHandsEventTailer(
+        tmp_path,
+        projector=FakeProjector(),
+        sink=emitted.append,
+        saved_projection_loader=load,
+        poll_interval=0.01,
+        max_event_bytes=256,
+    )
+    tailer.start()
+    _wait_until(lambda: len(emitted) == 1)
+    assert [step.content for step in emitted] == ["live zero"]
+
+    tailer.finish(final_projection=final_projection)
+
+    assert loader_calls == [final_projection]
+    assert [step.content for step in emitted] == ["live zero", "sanitized one", "sanitized two"]
+    assert tailer.emitted_keys == ("zero", "one", "two")
+    assert [item.key for item in tailer.projection_snapshot()] == ["zero", "one", "two"]
+
+
+def _oversized_after_live_prefix(
+    tmp_path: Path,
+    *,
+    loader,
+) -> tuple[OpenHandsEventTailer, list[AgentStep]]:
+    emitted: list[AgentStep] = []
+    events_dir = _event_dir(tmp_path)
+    _write_event(events_dir / "0.json", kind="agent", key="zero", text="live zero", ready=True)
+    _write_event(events_dir / "1.json", kind="agent", key="one", text="x" * 300, ready=True)
+    tailer = OpenHandsEventTailer(
+        tmp_path,
+        projector=FakeProjector(),
+        sink=emitted.append,
+        saved_projection_loader=loader,
+        poll_interval=0.01,
+        max_event_bytes=256,
+    )
+    tailer.start()
+    _wait_until(lambda: len(emitted) == 1)
+    return tailer, emitted
+
+
+def test_oversized_event_without_saved_fallback_fails_closed(tmp_path: Path) -> None:
+    tailer, emitted = _oversized_after_live_prefix(tmp_path, loader=None)
+
+    with pytest.raises(OpenHandsTraceError, match="projection failed"):
+        tailer.finish()
+    assert [step.content for step in emitted] == ["live zero"]
+
+
+@pytest.mark.parametrize(
+    "loader",
+    [
+        lambda _final: (_ for _ in ()).throw(FileNotFoundError("missing trajectory")),
+        lambda _final: object(),
+        lambda _final: _saved_projection(
+            ("zero", "live zero"),
+            ("one", "sanitized one"),
+            source_event_ids=frozenset({"0"}),
+        ),
+        lambda _final: _saved_projection(source_event_ids=frozenset({"1"})),
+        lambda _final: _saved_projection(
+            ("divergent", "live zero"),
+            ("one", "sanitized one"),
+            source_event_ids=frozenset({"1"}),
+        ),
+        lambda _final: _saved_projection(
+            ("zero", "changed zero"),
+            ("one", "sanitized one"),
+            source_event_ids=frozenset({"1"}),
+        ),
+        lambda _final: SavedTrajectoryProjection(
+            steps=(object(),),
+            source_event_ids=frozenset({"1"}),
+        ),
+    ],
+    ids=[
+        "missing",
+        "malformed-wrapper",
+        "missing-oversized-id",
+        "shorter",
+        "divergent-key",
+        "divergent-payload",
+        "malformed-step",
+    ],
+)
+def test_invalid_saved_fallbacks_fail_closed(tmp_path: Path, loader) -> None:
+    tailer, emitted = _oversized_after_live_prefix(tmp_path, loader=loader)
+
+    with pytest.raises(OpenHandsTraceError, match="projection failed"):
+        tailer.finish()
+    assert [step.content for step in emitted] == ["live zero"]
+
+
+@pytest.mark.parametrize("mutation", ["shrink", "disappear", "move-boundary"])
+def test_deferred_oversized_event_cannot_change_before_finalization(tmp_path: Path, mutation: str) -> None:
+    loader_calls = []
+    events_dir = _event_dir(tmp_path)
+    oversized = events_dir / "0.json"
+    _write_event(oversized, kind="agent", key="zero", text="x" * 100, ready=True)
+    tailer = OpenHandsEventTailer(
+        tmp_path,
+        projector=FakeProjector(),
+        sink=lambda _step: None,
+        saved_projection_loader=lambda final: (
+            loader_calls.append(final) or _saved_projection(("zero", "sanitized"), source_event_ids=frozenset({"0"}))
+        ),
+        poll_interval=0.01,
+        max_event_bytes=64,
+    )
+    tailer.start()
+    _wait_until(lambda: tailer._deferred_oversized_origin is not None)
+    if mutation == "shrink":
+        _write_event(oversized, kind="ignored")
+    else:
+        oversized.unlink()
+        if mutation == "move-boundary":
+            _write_event(events_dir / "1.json", kind="agent", key="one", text="x" * 100, ready=True)
+
+    with pytest.raises(OpenHandsTraceError, match="projection failed"):
+        tailer.finish()
+    assert loader_calls == []
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="platform has no symlink support")
+def test_deferred_suffix_symlink_fails_before_saved_fallback(tmp_path: Path) -> None:
+    loader_calls = []
+    events_dir = _event_dir(tmp_path)
+    _write_event(events_dir / "0.json", kind="agent", key="zero", text="x" * 100, ready=True)
+    target = tmp_path / "outside.json"
+    _write_event(target, kind="agent", key="one", text="outside", ready=True)
+    os.symlink(target, events_dir / "1.json")
+    tailer = OpenHandsEventTailer(
+        tmp_path,
+        projector=FakeProjector(),
+        sink=lambda _step: None,
+        saved_projection_loader=lambda final: (
+            loader_calls.append(final) or _saved_projection(("zero", "sanitized"), source_event_ids=frozenset({"0"}))
+        ),
+        poll_interval=0.01,
+        max_event_bytes=64,
+    )
+    tailer.start()
+
+    with pytest.raises(OpenHandsTraceError, match="projection failed"):
+        tailer.finish()
+    assert loader_calls == []
+
+
+def test_deferred_suffix_id_gap_fails_before_saved_fallback(tmp_path: Path) -> None:
+    loader_calls = []
+    events_dir = _event_dir(tmp_path)
+    _write_event(events_dir / "0.json", kind="agent", key="zero", text="x" * 100, ready=True)
+    _write_event(events_dir / "2.json", kind="agent", key="two", text="suffix", ready=True)
+    tailer = OpenHandsEventTailer(
+        tmp_path,
+        projector=FakeProjector(),
+        sink=lambda _step: None,
+        saved_projection_loader=lambda final: (
+            loader_calls.append(final) or _saved_projection(("zero", "sanitized"), source_event_ids=frozenset({"0"}))
+        ),
+        poll_interval=0.01,
+        max_event_bytes=64,
+    )
+    tailer.start()
+
+    with pytest.raises(OpenHandsTraceError, match="projection failed"):
+        tailer.finish()
+    assert loader_calls == []
+
+
+def test_deferred_suffix_change_during_saved_load_fails_before_emission(tmp_path: Path) -> None:
+    emitted = []
+    events_dir = _event_dir(tmp_path)
+    _write_event(events_dir / "0.json", kind="agent", key="zero", text="x" * 100, ready=True)
+    suffix = events_dir / "1.json"
+    _write_event(suffix, kind="agent", key="one", text="suffix", ready=True)
+
+    def load(_final: bool) -> SavedTrajectoryProjection:
+        _write_event(suffix, kind="agent", key="one", text="changed suffix", ready=True)
+        return _saved_projection(
+            ("zero", "sanitized zero"),
+            ("one", "sanitized one"),
+            source_event_ids=frozenset({"0", "1"}),
+        )
+
+    tailer = OpenHandsEventTailer(
+        tmp_path,
+        projector=FakeProjector(),
+        sink=emitted.append,
+        saved_projection_loader=load,
+        poll_interval=0.01,
+        max_event_bytes=64,
+    )
+    tailer.start()
+
+    with pytest.raises(OpenHandsTraceError, match="projection failed"):
+        tailer.finish()
+    assert emitted == []
+
+
+def test_saved_fallback_timeout_cancels_late_step_delivery(tmp_path: Path) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    emitted = []
+    events_dir = _event_dir(tmp_path)
+    _write_event(events_dir / "0.json", kind="agent", key="zero", text="x" * 100, ready=True)
+
+    def load(_final: bool) -> SavedTrajectoryProjection:
+        entered.set()
+        assert release.wait(timeout=2)
+        return _saved_projection(("zero", "sanitized"), source_event_ids=frozenset({"0"}))
+
+    tailer = OpenHandsEventTailer(
+        tmp_path,
+        projector=FakeProjector(),
+        sink=emitted.append,
+        saved_projection_loader=load,
+        poll_interval=0.01,
+        max_event_bytes=64,
+    )
+    tailer.start()
+    assert not entered.wait(timeout=0.05)
+
+    with pytest.raises(OpenHandsTraceError, match="did not stop"):
+        tailer.finish(timeout=0.02)
+    assert entered.wait(timeout=2)
+    release.set()
+    assert tailer._thread is not None
+    tailer._thread.join(timeout=2)
+    assert not tailer._thread.is_alive()
+    assert emitted == []
 
 
 def test_live_tail_waits_at_an_id_gap_then_emits_in_numeric_order(tmp_path: Path) -> None:
