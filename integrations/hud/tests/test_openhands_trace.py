@@ -24,6 +24,7 @@ from cybergym_hud.openhands_trace import (
 )
 from cybergym_hud.receipt import NativeReceipt, NativeRunProfile
 from cybergym_hud.trace_backfill import StepRedactor, build_backfill_plan
+from cybergym_hud.trace_tail import OpenHandsEventTailer
 
 
 def _response(response_id: str, calls: list[tuple[str, str, dict]], *, reasoning: str | None = None) -> dict:
@@ -105,6 +106,38 @@ def _finish(event_id: int, text: str) -> dict:
         "action": "finish",
         "tool_call_metadata": _metadata(response, "call-finish"),
         "args": {"final_thought": text, "task_completed": "true", "thought": ""},
+    }
+
+
+def _condensation(event_id: int = 6) -> dict:
+    return {
+        "id": event_id,
+        "timestamp": f"2026-01-02T03:04:{event_id:02d}.000001",
+        "source": "agent",
+        "message": "Summary: fixture-only condensed memory",
+        "action": "condensation",
+        "tool_call_metadata": None,
+        "args": {
+            "forgotten_event_ids": None,
+            "forgotten_events_start_id": 1,
+            "forgotten_events_end_id": 5,
+            "summary": "fixture-only condensed memory",
+            "summary_offset": 1,
+        },
+    }
+
+
+def _error_observation(event_id: int, action_id: int, response: dict, call_id: str) -> dict:
+    return {
+        "id": event_id,
+        "timestamp": f"2026-01-02T03:04:{event_id:02d}.000001",
+        "source": "agent",
+        "message": "fixture recoverable tool error",
+        "cause": action_id,
+        "observation": "error",
+        "tool_call_metadata": _metadata(response, call_id),
+        "content": "fixture recoverable tool error",
+        "extras": {"error_id": ""},
     }
 
 
@@ -245,6 +278,99 @@ def test_unsupported_agent_action_without_metadata_fails_closed() -> None:
             },
             origin="fixture",
         )
+
+
+def test_exact_pinned_condensation_action_is_validated_and_omitted() -> None:
+    event = _condensation(104)
+    event["timestamp"] = "2026-01-02T03:06:44.000001"
+    projector = OpenHandsEventProjector()
+
+    decoded = projector.decode(event, origin="event_store")
+
+    assert decoded == DecodedOpenHandsEvent("104", "2026-01-02T03:06:44.000001Z", "skip")
+    assert projector.project([event], final=True, origin="event_store") == ()
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (
+            lambda event: event.update(tool_call_metadata={"tool_call_id": "not-a-condensation"}),
+            "unexpectedly has provider tool metadata",
+        ),
+        (
+            lambda event: event["args"].update(forgotten_event_ids=[1, 2]),
+            "select exactly one forgotten-event form",
+        ),
+        (
+            lambda event: event["args"].update(summary_offset=None),
+            "must pair summary with summary offset",
+        ),
+        (
+            lambda event: event["args"].update(private_payload="not pinned"),
+            "unsupported arguments",
+        ),
+    ],
+)
+def test_malformed_condensation_actions_fail_closed(mutation, message: str) -> None:
+    event = _condensation()
+    mutation(event)
+
+    with pytest.raises(TraceImportError, match=message):
+        OpenHandsEventProjector().decode(event, origin="fixture")
+
+
+def test_pinned_error_observation_is_a_failed_result_for_its_causal_tool_call() -> None:
+    response = _response(
+        "response-recoverable-error",
+        [("call-error", "execute_bash", {"command": "fixture-command"})],
+    )
+    events = [
+        _action(2, "run", response, "call-error"),
+        _error_observation(3, 2, response, "call-error"),
+    ]
+
+    projected = OpenHandsEventProjector().project(events, final=True)
+
+    assert [item.key for item in projected] == [
+        "response:response-recoverable-error",
+        "tool:call-error",
+    ]
+    tool_step = projected[1].step
+    assert isinstance(tool_step, ToolStep)
+    assert tool_step.call is not None
+    assert tool_step.call.name == "execute_bash"
+    assert tool_step.result is not None
+    assert tool_step.result.isError is True
+    assert tool_step.result.content[0].text == "fixture recoverable tool error"
+
+
+def test_error_observation_requires_the_exact_causal_action() -> None:
+    response = _response(
+        "response-wrong-cause",
+        [("call-error", "execute_bash", {"command": "fixture-command"})],
+    )
+    events = [
+        _action(2, "run", response, "call-error"),
+        _error_observation(3, 99, response, "call-error"),
+    ]
+
+    with pytest.raises(TraceImportError, match="does not point to its action"):
+        OpenHandsEventProjector().project(events, final=True)
+
+
+def test_non_error_observation_still_requires_matching_action_type() -> None:
+    response = _response(
+        "response-wrong-observation",
+        [("call-run", "execute_bash", {"command": "fixture-command"})],
+    )
+    events = [
+        _action(2, "run", response, "call-run"),
+        _observation(3, 2, "browse", response, "call-run", "fixture result"),
+    ]
+
+    with pytest.raises(TraceImportError, match="action type disagrees with its request"):
+        OpenHandsEventProjector().project(events, final=True)
 
 
 def test_projects_sanitized_decoded_events_without_raw_redecode() -> None:
@@ -446,6 +572,81 @@ def _profile() -> NativeRunProfile:
         top_p=1,
         base_url_mode="provider-default",
     )
+
+
+def test_live_tailer_and_posthoc_import_match_across_condensation(tmp_path: Path) -> None:
+    agent_id = "1" * 32
+    checksum = "2" * 64
+    server = "http://127.0.0.1:8666"
+    events = [
+        {
+            "id": 0,
+            "timestamp": "2026-01-02T03:04:00.000001",
+            "source": "user",
+            "message": "fixture",
+            "action": "message",
+            "args": {"content": OG_PROMPT},
+        },
+        {
+            "id": 1,
+            "timestamp": "2026-01-02T03:04:01.000001",
+            "source": "environment",
+            "message": "",
+            "observation": "agent_state_changed",
+            "content": "",
+            "extras": {"agent_state": "running"},
+        },
+        *_parallel_events(),
+        _condensation(6),
+        _finish(7, "Finished fixture task after condensation."),
+    ]
+    (tmp_path / "args.json").write_text(
+        json.dumps(
+            {
+                "task": {
+                    "task_id": "arvo:10013",
+                    "agent_id": agent_id,
+                    "checksum": checksum,
+                    "server": server,
+                },
+                "agent_args": {"llm": {"api_key": None}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "trajectory").write_text(json.dumps(events), encoding="utf-8")
+    events_dir = tmp_path / "file" / "sessions" / "fixture-session" / "events"
+    events_dir.mkdir(parents=True)
+    for event in events:
+        (events_dir / f"{event['id']}.json").write_text(json.dumps(event), encoding="utf-8")
+
+    emitted = []
+    tailer = OpenHandsEventTailer(
+        tmp_path,
+        projector=OpenHandsEventProjector(),
+        sink=emitted.append,
+        poll_interval=0.01,
+        project_kwargs={"skip_initial_user_prompt": OG_PROMPT},
+    )
+    tailer.start()
+    tailer.finish()
+    receipt = NativeReceipt(
+        status="completed",
+        task_id="arvo:10013",
+        server=server,
+        run_profile=_profile(),
+        agent_id=agent_id,
+        upstream_returned_agent_id=agent_id,
+        log_dir=str(tmp_path),
+    )
+
+    imported = import_openhands_trace(receipt)
+
+    assert tailer.projection_snapshot() == imported.steps
+    assert tuple(emitted) == tuple(item.step for item in imported.steps)
+    assert tailer.emitted_keys == tuple(item.key for item in imported.steps)
+    assert tailer.final_event_count == len(events)
+    assert tailer.final_step_count == len(imported.steps) == 4
 
 
 def test_posthoc_import_verifies_prompt_redacts_task_secrets_and_digests(tmp_path: Path) -> None:

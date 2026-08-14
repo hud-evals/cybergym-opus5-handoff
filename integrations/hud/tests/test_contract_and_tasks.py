@@ -38,6 +38,12 @@ def test_packaged_contract_and_checkout_are_pinned() -> None:
         "hard_max_concurrent": 15,
         "isolated_upstream_module_per_rollout": True,
     }
+    assert CONTRACT["runtime"]["trajectory_projection"]["pinned_condensation_action"] == (
+        "schema_validated_internal_memory_boundary_not_exported"
+    )
+    assert CONTRACT["runtime"]["trajectory_projection"]["pinned_error_observation"] == (
+        "causally_matched_provider_tool_result_with_isError_true"
+    )
     assert CONTRACT["runtime"]["controller_termination"] == {
         "authoritative_source": "append_only_openhands_event_store",
         "gradeable_states": [

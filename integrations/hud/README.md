@@ -109,9 +109,14 @@ authoritative agent loop and log owner. After it returns, the adapter projects
 the saved, ordered model-visible assistant turns, provider tool calls, and tool
 results into HUD-native steps. Parallel actions sharing one provider response
 become one assistant turn; raw DOM/screenshots and other private metadata are
-not exported. Exact runtime/task secrets and boundary-safe credential/flag
-patterns are redacted, and an import failure marks the trace as infrastructure
-error without changing the native receipt or grader result.
+not exported. Pinned `CondensationAction` rows are schema-validated and then
+omitted: they are controller-owned memory boundaries, not provider assistant
+responses or tool calls. A pinned recoverable `ErrorObservation` is exported as
+the failed result of its provider tool call only when its response, call ID, and
+action cause all match; every other action/observation mismatch fails closed.
+Exact runtime/task secrets and boundary-safe credential/flag patterns are
+redacted, and an import failure marks the trace as infrastructure error without
+changing the native receipt or grader result.
 
 Pinned OpenHands reports ordinary headless max-iteration exhaustion through
 its generic controller `error` state, while original CyberGym accepts the saved

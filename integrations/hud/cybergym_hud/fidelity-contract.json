@@ -55,6 +55,8 @@
       "parallel_tools": "provider_order_with_causal_tool_results",
       "outer_user_prompt": "exact_pinned_og_prompt_without_duplicate_import",
       "reasoning": "provider_or_action_text_only_never_fabricated_from_token_counts",
+      "pinned_condensation_action": "schema_validated_internal_memory_boundary_not_exported",
+      "pinned_error_observation": "causally_matched_provider_tool_result_with_isError_true",
       "raw_browser_metadata_exported": false,
       "secret_redaction": "exact_runtime_and_task_secrets_plus_boundary_safe_patterns",
       "oversized_field_policy": "truncate_over_262144_utf8_bytes_with_original_size_and_sha256",

@@ -81,6 +81,15 @@ _TEXT_REDACTIONS: tuple[tuple[re.Pattern[str], str], ...] = (
         rf"\1{REDACTION}",
     ),
 )
+_CONDENSATION_ARGS = frozenset(
+    {
+        "forgotten_event_ids",
+        "forgotten_events_start_id",
+        "forgotten_events_end_id",
+        "summary",
+        "summary_offset",
+    }
+)
 
 
 class TraceImportError(RuntimeError):
@@ -226,6 +235,68 @@ def _json_fingerprint(value: object) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _event_index(value: object, *, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise TraceImportError(f"{label} must be a nonnegative integer")
+    return value
+
+
+def _validate_condensation_action(
+    event: Mapping[str, Any],
+    *,
+    origin: str,
+    event_id: str,
+) -> None:
+    """Validate but do not retain pinned OpenHands' internal memory action."""
+
+    if event.get("tool_call_metadata") is not None:
+        raise TraceImportError(f"{origin} condensation event {event_id} unexpectedly has provider tool metadata")
+    if event.get("observation") is not None:
+        raise TraceImportError(f"{origin} condensation event {event_id} also has an observation")
+    args = _mapping(event.get("args"), label=f"{origin} condensation event {event_id} args")
+    unknown = set(args) - _CONDENSATION_ARGS
+    if unknown:
+        raise TraceImportError(f"{origin} condensation event {event_id} has unsupported arguments")
+
+    forgotten_ids = args.get("forgotten_event_ids")
+    range_start = args.get("forgotten_events_start_id")
+    range_end = args.get("forgotten_events_end_id")
+    uses_ids = forgotten_ids is not None
+    uses_range = range_start is not None or range_end is not None
+    if uses_ids == uses_range:
+        raise TraceImportError(f"{origin} condensation event {event_id} must select exactly one forgotten-event form")
+    if uses_ids:
+        if not isinstance(forgotten_ids, list):
+            raise TraceImportError(f"{origin} condensation event {event_id} forgotten event ids must be a list")
+        for value in forgotten_ids:
+            _event_index(value, label=f"{origin} condensation event {event_id} forgotten event id")
+        if range_start is not None or range_end is not None:  # pragma: no cover - explicit invariant
+            raise TraceImportError(f"{origin} condensation event {event_id} mixes forgotten-event forms")
+    else:
+        start = _event_index(
+            range_start,
+            label=f"{origin} condensation event {event_id} forgotten range start",
+        )
+        end = _event_index(
+            range_end,
+            label=f"{origin} condensation event {event_id} forgotten range end",
+        )
+        if start > end:
+            raise TraceImportError(f"{origin} condensation event {event_id} has a reversed forgotten range")
+
+    summary = args.get("summary")
+    summary_offset = args.get("summary_offset")
+    if (summary is None) != (summary_offset is None):
+        raise TraceImportError(f"{origin} condensation event {event_id} must pair summary with summary offset")
+    if summary is not None:
+        if not isinstance(summary, str):
+            raise TraceImportError(f"{origin} condensation event {event_id} summary must be text")
+        _event_index(
+            summary_offset,
+            label=f"{origin} condensation event {event_id} summary offset",
+        )
+
+
 def _timestamp(value: object, *, label: str) -> str | None:
     rendered = _string(value, label=label, required=False)
     if rendered is None:
@@ -324,6 +395,14 @@ class OpenHandsEventProjector:
                 "agent_text",
                 text=self._redactor.text(text),
             )
+        if source == "agent" and action == "condensation":
+            _validate_condensation_action(event, origin=origin, event_id=event_id)
+            # CondensationAction is emitted by the pinned controller before it
+            # immediately asks CodeAct to step again with a rewritten memory
+            # view. It is neither a provider assistant response nor a tool
+            # request/result, so retain no summary or forgotten-history data in
+            # the exported HUD conversation.
+            return DecodedOpenHandsEvent(event_id, timestamp, "skip")
 
         metadata = _mapping(event.get("tool_call_metadata"), label=f"{origin} event {event_id} metadata")
         call_id = _string(metadata.get("tool_call_id"), label=f"{origin} event {event_id} call id")
@@ -413,6 +492,15 @@ class OpenHandsEventProjector:
             success = event.get("success")
             if success is not None and not isinstance(success, bool):
                 raise TraceImportError(f"{origin} observation {event_id} success is not boolean")
+            if observation == "error":
+                if success is not None:
+                    raise TraceImportError(f"{origin} error observation {event_id} unexpectedly has success state")
+                extras = _mapping(event.get("extras", {}), label=f"{origin} error observation {event_id} extras")
+                if set(extras) - {"error_id"}:
+                    raise TraceImportError(f"{origin} error observation {event_id} has unsupported extras")
+                error_id = extras.get("error_id", "")
+                if not isinstance(error_id, str):
+                    raise TraceImportError(f"{origin} error observation {event_id} error id is not text")
             return DecodedOpenHandsEvent(
                 event_id=event_id,
                 timestamp=timestamp,
@@ -563,7 +651,8 @@ class OpenHandsEventProjector:
                     action_event = action_by_call[call_id]
                     if event.cause != action_event.event_id:
                         raise TraceImportError(f"tool result {call_id} does not point to its action")
-                    if event.action_name != action_event.action_name:
+                    is_error_observation = event.action_name == "error"
+                    if event.action_name != action_event.action_name and not is_error_observation:
                         raise TraceImportError(f"tool result {call_id} action type disagrees with its request")
                     response_steps.append(
                         ProjectedStep(
@@ -575,7 +664,7 @@ class OpenHandsEventProjector:
                                 result=MCPToolResult(
                                     call_id=call.id,
                                     content=[TextContent(type="text", text=event.text or "")],
-                                    isError=event.success is False,
+                                    isError=is_error_observation or event.success is False,
                                 ),
                                 started_at=event.timestamp,
                                 ended_at=event.timestamp,
