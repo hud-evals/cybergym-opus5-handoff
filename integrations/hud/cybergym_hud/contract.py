@@ -188,7 +188,7 @@ def validate_contract(
         "state_isolation": "one_responses_chain_per_openhands_llm_instance",
         "continuation": "previous_response_id_only_for_exact_tool_or_user_transcript_extension",
         "history_drift": "restart_from_complete_current_openhands_visible_history",
-        "provider_retries": "openai_sdk_two_beneath_pinned_openhands_retry_policy",
+        "provider_retries": "openai_sdk_two_beneath_pinned_openhands_retry_policy_including_max_output_incomplete",
         "cost_accounting": "fixed_2026_08_13_standard_sol_rates_with_long_context_multiplier",
         "served_model_identity": "gpt-5.6-sol_or_dated_snapshot",
         "transport_omits": ["temperature", "top_p", "stop"],
@@ -196,7 +196,7 @@ def validate_contract(
         "shim_sha256": {
             "openhands_shim/sitecustomize.py": "d09cf474fb16711f7d065565d641f50bf46026d4d18f18607fe9e29dc41e5b78",
             "openhands_shim/_cybergym_openhands_compat.py": (
-                "1003b8bdfcdc54573ea07febe5955c570c38e05355af358802df1ffe3dd635e8"
+                "f0d38cc047710a7fa41d3123db4fcb69f723d10d9d32dead3429700bcb82e864"
             ),
         },
     }:

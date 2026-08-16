@@ -69,7 +69,11 @@ choice.
 The OpenAI SDK's internal retry count is explicitly pinned to two, matching
 the pinned LiteLLM OpenAI transport beneath OpenHands' outer retry decorator.
 Retryable rate-limit, timeout, connection, and server failures are translated
-back to the exception classes that outer policy already recognizes. Cost
+back to the exception classes that outer policy already recognizes. A
+Responses result that is incomplete specifically because it exhausted
+`max_output_tokens` is mapped to OpenHands' bounded no-response retry without
+using its potentially truncated text or tool arguments. Content-filter and
+unknown incomplete reasons remain hard failures. Cost
 metadata uses the published standard Sol rates as of 2026-08-13 ($5/M
 uncached input, $0.50/M cached input, and $30/M output),
 including the published >272K-input 2x-input/1.5x-output multiplier, rather

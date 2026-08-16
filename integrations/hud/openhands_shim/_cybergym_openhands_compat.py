@@ -224,7 +224,25 @@ def _response_to_model_response(response: Any, requested_model: str) -> tuple[An
 
     status = _field(response, "status")
     error = _field(response, "error")
-    if error is not None or status != "completed":
+    if error is not None:
+        raise RuntimeError(f"OpenAI Responses request did not complete: status={status!r}, error={error!r}")
+    if status == "incomplete":
+        incomplete = _field(response, "incomplete_details")
+        reason = _field(incomplete, "reason")
+        if reason == "max_output_tokens":
+            # OpenHands already applies its pinned, bounded LLM retry policy to
+            # LLMNoResponseError.  Do not adapt partial output: it can contain
+            # truncated tool arguments and is not a canonical CodeAct turn.
+            from openhands.core.exceptions import LLMNoResponseError
+
+            raise LLMNoResponseError(
+                "OpenAI Responses exhausted max_output_tokens before producing a complete CodeAct turn"
+            )
+        raise RuntimeError(
+            "OpenAI Responses request did not complete: "
+            f"status={status!r}, incomplete_reason={reason!r}, error={error!r}"
+        )
+    if status != "completed":
         raise RuntimeError(f"OpenAI Responses request did not complete: status={status!r}, error={error!r}")
     served_model = _field(response, "model")
     if not isinstance(served_model, str) or SERVED_MODEL_PATTERN.fullmatch(served_model) is None:

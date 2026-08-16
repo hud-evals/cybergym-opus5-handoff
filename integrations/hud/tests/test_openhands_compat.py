@@ -64,6 +64,10 @@ class FakeLiteLLMInternalServerError(Exception):
         self.kwargs = kwargs
 
 
+class FakeLLMNoResponseError(Exception):
+    pass
+
+
 @pytest.fixture(autouse=True)
 def _pinned_litellm_types(monkeypatch: pytest.MonkeyPatch):
     """The integration venv omits LiteLLM; the pinned OH venv supplies it."""
@@ -79,10 +83,19 @@ def _pinned_litellm_types(monkeypatch: pytest.MonkeyPatch):
     exceptions_module.RateLimitError = FakeLiteLLMRateLimitError
     exceptions_module.Timeout = FakeLiteLLMTimeout
     exceptions_module.InternalServerError = FakeLiteLLMInternalServerError
+    openhands_module = ModuleType("openhands")
+    core_module = ModuleType("openhands.core")
+    core_exceptions_module = ModuleType("openhands.core.exceptions")
+    core_exceptions_module.LLMNoResponseError = FakeLLMNoResponseError
+    core_module.exceptions = core_exceptions_module
+    openhands_module.core = core_module
     monkeypatch.setitem(sys.modules, "litellm", litellm)
     monkeypatch.setitem(sys.modules, "litellm.types", types_module)
     monkeypatch.setitem(sys.modules, "litellm.types.utils", utils_module)
     monkeypatch.setitem(sys.modules, "litellm.exceptions", exceptions_module)
+    monkeypatch.setitem(sys.modules, "openhands", openhands_module)
+    monkeypatch.setitem(sys.modules, "openhands.core", core_module)
+    monkeypatch.setitem(sys.modules, "openhands.core.exceptions", core_exceptions_module)
 
 
 def _load() -> ModuleType:
@@ -355,6 +368,32 @@ def test_bridge_fails_closed_on_model_effort_and_call_id_drift() -> None:
     incomplete = compat._ResponsesBridge("xhigh", client_factory=lambda **_kwargs: FakeClient(incomplete_api))
     with pytest.raises(RuntimeError, match="did not complete"):
         incomplete(model="gpt-5.6-sol", messages=[])
+
+    max_output_api = FakeResponses(
+        [
+            {
+                **_response("resp_max_output", [{"id": "rs", "type": "reasoning", "summary": []}]),
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens"},
+            }
+        ]
+    )
+    max_output = compat._ResponsesBridge("xhigh", client_factory=lambda **_kwargs: FakeClient(max_output_api))
+    with pytest.raises(FakeLLMNoResponseError, match="max_output_tokens"):
+        max_output(model="gpt-5.6-sol", messages=[])
+
+    filtered_api = FakeResponses(
+        [
+            {
+                **_response("resp_filtered", []),
+                "status": "incomplete",
+                "incomplete_details": {"reason": "content_filter"},
+            }
+        ]
+    )
+    filtered = compat._ResponsesBridge("xhigh", client_factory=lambda **_kwargs: FakeClient(filtered_api))
+    with pytest.raises(RuntimeError, match="content_filter"):
+        filtered(model="gpt-5.6-sol", messages=[])
 
 
 def test_multipart_message_text_preserves_each_responses_input_part() -> None:
