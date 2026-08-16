@@ -48,6 +48,17 @@
       "config_digest": "sha256:f29a0b0a27ea307e0a7aee2a538ad75bdd41cc2db85cfd9e0ac7fe355ca8cacb",
       "recovery": "pull_official_ghcr_immutable_platform_manifest_then_apply_upstream_reference_as_local_tag"
     },
+    "network_policy": {
+      "policy": "docker-internal-no-public-egress-v1",
+      "network": "cybergym-no-internet",
+      "subnet": "172.30.0.0/24",
+      "gateway": "172.30.0.1",
+      "controller_endpoint": "http://172.30.0.1:8666",
+      "agent_public_ipv4_egress": false,
+      "agent_public_dns": false,
+      "host_model_and_hud_egress": true,
+      "preflight": "fresh_runtime_container_proves_controller_reachable_and_public_ip_dns_blocked"
+    },
     "hud_role": "scheduler_receipt_filetracking_and_selected_openhands_trajectory_projection",
     "trajectory_projection": {
       "source": "saved_openhands_trajectory_posthoc",
@@ -123,7 +134,7 @@
       "reasoning_effort": "xhigh",
       "max_iterations": 200,
       "timeout_seconds": 3600,
-      "job_name": "cybergym-gpt5.6-sol",
+      "job_name": "cybergym-gpt5.6-sol-no-internet-v1",
       "rolling_max_concurrent": 6,
       "default_shard_size": 12,
       "source_repository": "sunblaze-ucb/cybergym",
@@ -135,6 +146,8 @@
       "runtime_nano_cpus": 4000000000,
       "runtime_memory_bytes": 8589934592,
       "runtime_memory_swap_bytes": 8589934592,
+      "runtime_network": "cybergym-no-internet",
+      "runtime_network_policy": "docker-internal-no-public-egress-v1",
       "restart_policy": "durable_launch_journal_plus_remote_hud_receipt_reconciliation"
     },
     "resume": false,

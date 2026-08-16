@@ -13,7 +13,9 @@ from cybergym_hud.campaign import (
     CampaignBlocked,
     CampaignState,
     _campaign_identity,
+    _catalog_digest,
     campaign_lock,
+    load_preflight_fingerprints,
     reconcile_running_attempt,
     require_remote_job_receipt,
     require_remote_trace_enter,
@@ -23,6 +25,7 @@ from cybergym_hud.campaign import (
 from cybergym_hud.native import NativeOpenHandsConfig
 from cybergym_hud.openhands_trace import ProjectedStep, build_trace_import_metadata
 from cybergym_hud.receipt import NativeReceipt
+from cybergym_hud.runtime_network import expected_network_attestation, network_attestation_sha256
 
 
 def _remote_projected_events(*, grader_error: bool = False) -> list[dict[str, object]]:
@@ -53,7 +56,7 @@ def _config(tmp_path: Path) -> NativeOpenHandsConfig:
     return NativeOpenHandsConfig(
         repository_root=Path(__file__).resolve().parents[3],
         data_dir=tmp_path / "data",
-        server="http://127.0.0.1:8666",
+        server="http://172.30.0.1:8666",
         model="gpt-5.6-sol",
         reasoning_effort="xhigh",
         log_dir=tmp_path / "results/logs",
@@ -64,6 +67,7 @@ def _config(tmp_path: Path) -> NativeOpenHandsConfig:
         runtime_nano_cpus=4_000_000_000,
         runtime_memory_bytes=8 * 1024**3,
         runtime_memory_swap_bytes=8 * 1024**3,
+        runtime_network="cybergym-no-internet",
     ).normalized()
 
 
@@ -78,6 +82,47 @@ def test_paid_campaign_profile_is_exact_and_width_is_capped(tmp_path: Path) -> N
             max_concurrent=1,
             shard_size=12,
         )
+
+
+def test_paid_campaign_requires_matching_no_internet_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    ids = ("arvo:1", "oss-fuzz:2")
+    monkeypatch.setattr("cybergym_hud.campaign.catalog_task_ids", lambda _root: ids)
+    network = expected_network_attestation(server_url=config.server)
+    report = {
+        "schema_version": "1",
+        "no_model_call": True,
+        "catalog_sha256": _catalog_digest(ids),
+        "task_count": len(ids),
+        "grader_server_mode": "images",
+        "max_concurrent": 6,
+        "runtime_limits": {
+            "nano_cpus": 4_000_000_000,
+            "memory": 8 * 1024**3,
+            "memory_swap": 8 * 1024**3,
+        },
+        "runtime_network": network,
+        "runtime_network_sha256": network_attestation_sha256(network),
+        "source_artifact_sha256": "1" * 64,
+        "grader_artifact_sha256": "2" * 64,
+        "source_provenance_sha256": "3" * 64,
+        "source_selected_manifest_sha256": "4" * 64,
+    }
+    path = tmp_path / "preflight.json"
+    path.write_text(json.dumps(report), encoding="utf-8")
+    path.chmod(0o600)
+
+    fingerprints = load_preflight_fingerprints(path, config=config, max_concurrent=6)
+    assert fingerprints["runtime_network_sha256"] == network_attestation_sha256(network)
+
+    report["runtime_network"] = {**network, "public_dns_blocked": False}
+    path.write_text(json.dumps(report), encoding="utf-8")
+    path.chmod(0o600)
+    with pytest.raises(CampaignBlocked, match="does not match"):
+        load_preflight_fingerprints(path, config=config, max_concurrent=6)
 
 
 def test_state_is_deterministic_mode_0600_and_contains_no_credentials(tmp_path: Path) -> None:

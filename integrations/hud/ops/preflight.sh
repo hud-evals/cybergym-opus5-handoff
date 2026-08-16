@@ -16,6 +16,7 @@ REASONING_EFFORT=${CG_REASONING_EFFORT:-xhigh}
 RESULTS_DIR=${CG_RESULTS_DIR:-}
 SERVER_MODE=${CG_SERVER_MODE:-images}
 SERVER_BINARY_DIR=${CG_SERVER_BINARY_DIR:-}
+RUNTIME_NETWORK=${CG_RUNTIME_NETWORK:-}
 UV_BIN=${CG_UV_BIN:-uv}
 
 usage() {
@@ -116,6 +117,8 @@ done
 [ -n "$DATA_DIR" ] || die "set CG_DATA_DIR or pass --data-dir"
 [ -n "$SERVER_URL" ] || die "set CG_SERVER_URL or pass --server"
 [ -n "$RESULTS_DIR" ] || die "set CG_RESULTS_DIR or pass --results-dir"
+[ "$RUNTIME_NETWORK" = cybergym-no-internet ] \
+    || die "CG_RUNTIME_NETWORK must be cybergym-no-internet"
 
 case "$(uname -s)/$(uname -m)" in
     Linux/x86_64|Linux/amd64) ok 'native Linux amd64 host' ;;
@@ -157,6 +160,11 @@ fi
 "$SCRIPT_DIR/runtime-image.sh" verify >/dev/null \
     || die "OpenHands runtime is missing or has the wrong immutable identity; run ops/runtime-image.sh ensure"
 ok 'exact pinned OpenHands amd64 runtime image and paper-era local tag'
+
+"$UV_BIN" run --frozen --no-sync --project "$REPOSITORY_ROOT/integrations/hud" \
+    cybergym-hud-runtime-network verify --server "$SERVER_URL" >/dev/null \
+    || die "agent runtime network does not prove private-server-only access"
+ok 'agent runtime private-server reachability and no public IP/DNS egress'
 
 case "$TASK_ID" in
     arvo:*)

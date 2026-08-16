@@ -29,6 +29,13 @@ from .native import (
     CAMPAIGN_RUNTIME_MEMORY_SWAP_BYTES,
     CAMPAIGN_RUNTIME_NANO_CPUS,
 )
+from .runtime_network import (
+    RUNTIME_NETWORK_NAME,
+    RuntimeNetworkError,
+    expected_network_attestation,
+    network_attestation_sha256,
+    probe_runtime_network,
+)
 from .scheduler import write_summary
 from .taskset import task_ids
 
@@ -544,6 +551,7 @@ def validate_full_catalog(
     max_concurrent: int,
     image_identity: Callable[[str], str | None],
     runtime_limit_probe: Callable[[], dict[str, int]],
+    runtime_network_probe: Callable[[], dict[str, Any]],
     server_attestation: dict[str, Any],
     cpu_count: int,
     memory_bytes: int,
@@ -570,6 +578,19 @@ def validate_full_catalog(
             "Docker did not preserve the paid campaign's runtime limits: "
             f"expected={EXPECTED_RUNTIME_LIMITS}, observed={runtime_limits}"
         )
+    try:
+        network_attestation = runtime_network_probe()
+    except RuntimeNetworkError as exc:
+        raise CatalogPreflightError("Docker private-only runtime network probe failed") from exc
+    expected_network = expected_network_attestation(
+        server_url=f"http://{server_attestation.get('host')}:{server_attestation.get('port')}"
+    )
+    if network_attestation != expected_network:
+        raise CatalogPreflightError(
+            "Docker did not preserve the paid campaign's private-only runtime network: "
+            f"expected={expected_network}, observed={network_attestation}"
+        )
+    runtime_network_sha256 = network_attestation_sha256(network_attestation)
     errors: list[str] = []
     image_refs: set[str] = set()
     tar_count = 0
@@ -743,6 +764,8 @@ def validate_full_catalog(
         "max_concurrent": max_concurrent,
         "capacity": capacity,
         "runtime_limits": runtime_limits,
+        "runtime_network": network_attestation,
+        "runtime_network_sha256": runtime_network_sha256,
         "server_attestation": server_attestation,
         **source_provenance_fields,
     }
@@ -789,7 +812,7 @@ def main() -> None:
                 OPENHANDS_RUNTIME_IMAGE,
                 command=["/bin/true"],
                 entrypoint=[],
-                network_disabled=True,
+                network=RUNTIME_NETWORK_NAME,
                 nano_cpus=CAMPAIGN_RUNTIME_NANO_CPUS,
                 mem_limit=CAMPAIGN_RUNTIME_MEMORY_BYTES,
                 memswap_limit=CAMPAIGN_RUNTIME_MEMORY_SWAP_BYTES,
@@ -815,6 +838,7 @@ def main() -> None:
             max_concurrent=args.max_concurrent,
             image_identity=image_identity,
             runtime_limit_probe=runtime_limit_probe,
+            runtime_network_probe=lambda: probe_runtime_network(client, server_url=args.server),
             server_attestation=_attest_live_server(
                 repository_root=args.repository_root.expanduser().resolve(),
                 server_url=args.server,

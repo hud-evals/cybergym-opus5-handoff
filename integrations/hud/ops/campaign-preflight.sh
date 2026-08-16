@@ -60,7 +60,7 @@ case "$MAX_CONCURRENT" in
     *) die "--max-concurrent must be between 1 and 6" ;;
 esac
 
-mkdir -p "$RESULTS_DIR/campaign-gpt56-sol-200"
+mkdir -p "$RESULTS_DIR/campaign-gpt56-sol-200-no-internet-v1"
 
 # The common preflight validates host/source/runtime identities, HUD and model
 # access without inference, server auth, and one concrete task end to end.
@@ -73,7 +73,7 @@ set -- "$UV_BIN" run --frozen --no-sync --project "$REPOSITORY_ROOT/integrations
     --server "$SERVER_URL" \
     --server-mode "$SERVER_MODE" \
     --max-concurrent "$MAX_CONCURRENT" \
-    --report "$RESULTS_DIR/campaign-gpt56-sol-200/full-corpus-preflight.json"
+    --report "$RESULTS_DIR/campaign-gpt56-sol-200-no-internet-v1/full-corpus-preflight.json"
 if [ "$SERVER_MODE" = binary ]; then
     [ -n "$SERVER_BINARY_DIR" ] || die "binary mode requires CG_SERVER_BINARY_DIR"
     [ -n "$SERVER_DEPLOYMENT_SEAL" ] || die "binary mode requires CG_SERVER_DEPLOYMENT_SEAL"

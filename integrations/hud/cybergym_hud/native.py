@@ -34,6 +34,7 @@ from .openhands_trace import (
     runtime_secret_values,
 )
 from .receipt import NativeReceipt, NativeRunProfile, NativeTaskBinding, normalize_server
+from .runtime_network import RUNTIME_NETWORK_NAME
 from .trace_tail import OpenHandsEventTailer, OpenHandsTraceError, SavedTrajectoryProjection
 from .upstream import require_upstream_agent_checkout
 
@@ -72,6 +73,7 @@ class NativeOpenHandsConfig:
     runtime_nano_cpus: int | None = None
     runtime_memory_bytes: int | None = None
     runtime_memory_swap_bytes: int | None = None
+    runtime_network: Literal["cybergym-no-internet"] = RUNTIME_NETWORK_NAME
     # Runtime-only bridge.  It is deliberately absent from repr/equality and
     # every durable receipt/profile so callable state and trace credentials
     # can never enter campaign journals.
@@ -108,6 +110,8 @@ class NativeOpenHandsConfig:
                 raise ValueError("runtime CPU, memory, and memory+swap limits must be positive integers together")
             if memory_swap_bytes < memory_bytes:
                 raise ValueError("runtime memory+swap limit may not be lower than the memory limit")
+        if self.runtime_network != RUNTIME_NETWORK_NAME:
+            raise ValueError(f"unsupported runtime network: {self.runtime_network!r}")
         return NativeOpenHandsConfig(
             repository_root=root,
             data_dir=self.data_dir.expanduser().resolve(),
@@ -132,6 +136,7 @@ class NativeOpenHandsConfig:
             runtime_nano_cpus=self.runtime_nano_cpus,
             runtime_memory_bytes=self.runtime_memory_bytes,
             runtime_memory_swap_bytes=self.runtime_memory_swap_bytes,
+            runtime_network=self.runtime_network,
             trace_step_sink=self.trace_step_sink,
             trace_projection_sink=self.trace_projection_sink,
         )
@@ -165,6 +170,7 @@ class NativeOpenHandsConfig:
             runtime_nano_cpus=self.runtime_nano_cpus,
             runtime_memory_bytes=self.runtime_memory_bytes,
             runtime_memory_swap_bytes=self.runtime_memory_swap_bytes,
+            network_mode="cybergym-docker-internal-no-public-egress-v1",
         )
 
 
@@ -450,13 +456,17 @@ def execute_upstream_openhands(
     upstream = module or load_upstream_openhands(config.repository_root)
     original_subprocess = getattr(upstream, "subprocess", None)
     runtime_kwargs = None
-    if config.runtime_nano_cpus is not None:
-        runtime_kwargs = {
-            "auto_remove": True,
-            "nano_cpus": config.runtime_nano_cpus,
-            "mem_limit": config.runtime_memory_bytes,
-            "memswap_limit": config.runtime_memory_swap_bytes,
-        }
+    if config.runtime_nano_cpus is not None or config.runtime_network:
+        runtime_kwargs = {"auto_remove": True}
+        runtime_kwargs["network"] = config.runtime_network
+        if config.runtime_nano_cpus is not None:
+            runtime_kwargs.update(
+                {
+                    "nano_cpus": config.runtime_nano_cpus,
+                    "mem_limit": config.runtime_memory_bytes,
+                    "memswap_limit": config.runtime_memory_swap_bytes,
+                }
+            )
     if config.reasoning_effort or runtime_kwargs is not None:
         if original_subprocess is None:
             return NativeReceipt(

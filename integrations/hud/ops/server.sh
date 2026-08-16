@@ -16,11 +16,16 @@ esac
 : "${CG_RESULTS_DIR:?CG_RESULTS_DIR is required}"
 : "${CG_SERVER_MODE:?CG_SERVER_MODE is required}"
 : "${CG_UV_BIN:?CG_UV_BIN is required}"
+: "${CG_RUNTIME_NETWORK:?CG_RUNTIME_NETWORK is required}"
 : "${CYBERGYM_API_KEY:?CYBERGYM_API_KEY is required; public default is forbidden}"
 
 PORT=${CG_SERVER_PORT:-8666}
-HOST=$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}')
-[ -n "$HOST" ] || { printf '%s\n' 'server: Docker bridge has no gateway' >&2; exit 1; }
+"$CG_UV_BIN" run --frozen --no-sync --project "$CG_REPOSITORY_ROOT/integrations/hud" \
+    cybergym-hud-runtime-network verify >/dev/null
+[ "$CG_RUNTIME_NETWORK" = cybergym-no-internet ] \
+    || { printf '%s\n' 'server: CG_RUNTIME_NETWORK must be cybergym-no-internet' >&2; exit 1; }
+HOST=$(docker network inspect "$CG_RUNTIME_NETWORK" -f '{{(index .IPAM.Config 0).Gateway}}')
+[ "$HOST" = 172.30.0.1 ] || { printf '%s\n' 'server: private runtime-network gateway drift' >&2; exit 1; }
 
 SERVER_DIR=$CG_RESULTS_DIR/server
 mkdir -p "$SERVER_DIR"

@@ -34,12 +34,17 @@ from .openhands_trace import (
     validate_remote_trace_projection,
 )
 from .receipt import NativeReceipt, NativeTaskBinding
+from .runtime_network import (
+    RUNTIME_NETWORK_NAME,
+    expected_network_attestation,
+    network_attestation_sha256,
+)
 from .scheduler import run_many, verify_and_persist_remote_receipt, write_summary
 from .taskset import make_taskset
 from .taskset import task_ids as catalog_task_ids
 
 CAMPAIGN_SCHEMA_VERSION = "1"
-CAMPAIGN_JOB_NAME = "cybergym-gpt5.6-sol"
+CAMPAIGN_JOB_NAME = "cybergym-gpt5.6-sol-no-internet-v1"
 CAMPAIGN_MODEL = "gpt-5.6-sol"
 CAMPAIGN_REASONING_EFFORT = "xhigh"
 CAMPAIGN_MAX_ITER = 200
@@ -126,6 +131,7 @@ def validate_campaign_profile(config: NativeOpenHandsConfig, *, max_concurrent: 
         "runtime_nano_cpus": CAMPAIGN_RUNTIME_NANO_CPUS,
         "runtime_memory_bytes": CAMPAIGN_RUNTIME_MEMORY_BYTES,
         "runtime_memory_swap_bytes": CAMPAIGN_RUNTIME_MEMORY_SWAP_BYTES,
+        "runtime_network": RUNTIME_NETWORK_NAME,
     }
     drift = {
         name: {"expected": value, "observed": getattr(config, name)}
@@ -167,6 +173,7 @@ def load_preflight_fingerprints(
             "memory": CAMPAIGN_RUNTIME_MEMORY_BYTES,
             "memory_swap": CAMPAIGN_RUNTIME_MEMORY_SWAP_BYTES,
         },
+        "runtime_network": expected_network_attestation(server_url=config.server),
     }
     drift = {
         key: {"expected": value, "observed": report.get(key)}
@@ -181,6 +188,7 @@ def load_preflight_fingerprints(
         "grader_artifact_sha256",
         "source_provenance_sha256",
         "source_selected_manifest_sha256",
+        "runtime_network_sha256",
     ]
     if config.grader_server_mode == "binary":
         fingerprint_keys.append("binary_tree_sha256")
@@ -194,6 +202,9 @@ def load_preflight_fingerprints(
         if malformed:
             raise CampaignBlocked(f"full-corpus preflight report has no valid {key}")
         fingerprints[key] = value
+    expected_network_sha256 = network_attestation_sha256(required["runtime_network"])
+    if fingerprints["runtime_network_sha256"] != expected_network_sha256:
+        raise CampaignBlocked("full-corpus preflight runtime-network fingerprint drifted")
     return fingerprints
 
 
@@ -904,10 +915,11 @@ def main() -> None:
         runtime_nano_cpus=CAMPAIGN_RUNTIME_NANO_CPUS,
         runtime_memory_bytes=CAMPAIGN_RUNTIME_MEMORY_BYTES,
         runtime_memory_swap_bytes=CAMPAIGN_RUNTIME_MEMORY_SWAP_BYTES,
+        runtime_network=RUNTIME_NETWORK_NAME,
     )
     config.log_dir.mkdir(parents=True, exist_ok=True)
     config.tmp_dir.mkdir(parents=True, exist_ok=True)
-    state_dir = results_dir / "campaign-gpt56-sol-200"
+    state_dir = results_dir / "campaign-gpt56-sol-200-no-internet-v1"
     try:
         with campaign_lock(state_dir):
             artifact_fingerprints = load_preflight_fingerprints(

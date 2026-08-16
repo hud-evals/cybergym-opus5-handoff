@@ -28,6 +28,7 @@ from .openhands_trace import (
     validate_remote_trace_projection,
 )
 from .receipt import NativeReceipt, NativeTaskBinding
+from .runtime_network import RUNTIME_NETWORK_NAME
 from .taskset import make_taskset
 from .taskset import task_ids as catalog_task_ids
 
@@ -427,6 +428,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--silent", action="store_true")
     parser.add_argument("--keep-tmp", action="store_true")
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument(
+        "--runtime-network",
+        choices=(RUNTIME_NETWORK_NAME,),
+        required=True,
+        help="required private-only Docker network for every agent runtime",
+    )
     return parser
 
 
@@ -479,6 +486,7 @@ def main() -> None:
         silent=args.silent,
         remove_tmp=not args.keep_tmp,
         debug=args.debug,
+        runtime_network=args.runtime_network,
     )
     if len(selected) == 1:
         result = asyncio.run(run_one(selected[0], config, job_name=args.job_name))

@@ -26,6 +26,7 @@ from cybergym_hud.catalog_preflight import (
     _validate_binary_tree_symlinks,
     validate_full_catalog,
 )
+from cybergym_hud.runtime_network import expected_network_attestation
 
 
 def _write_task(data_dir: Path, task_id: str) -> None:
@@ -41,7 +42,17 @@ def _write_task(data_dir: Path, task_id: str) -> None:
 
 
 def _server_attestation() -> dict[str, object]:
-    return {"service": "test", "server_mode": "test", "mask_map": False}
+    return {
+        "service": "test",
+        "server_mode": "test",
+        "mask_map": False,
+        "host": "172.30.0.1",
+        "port": 8666,
+    }
+
+
+def _runtime_network() -> dict[str, object]:
+    return expected_network_attestation(server_url="http://172.30.0.1:8666")
 
 
 def test_server_attestation_fingerprint_excludes_only_observation_time() -> None:
@@ -293,6 +304,7 @@ def test_full_catalog_preflight_validates_every_source_and_image(
             "memory": 8 * 1024**3,
             "memory_swap": 8 * 1024**3,
         },
+        runtime_network_probe=_runtime_network,
         server_attestation=_server_attestation(),
         cpu_count=8,
         memory_bytes=22 * 1024**3,
@@ -300,7 +312,32 @@ def test_full_catalog_preflight_validates_every_source_and_image(
     assert report["no_model_call"] is True
     assert report["task_count"] == 2
     assert report["validated_tar_count"] == 2
+    assert report["runtime_network"] == _runtime_network()
+    assert len(report["runtime_network_sha256"]) == 64
     assert observed == expected
+
+
+def test_full_catalog_preflight_rejects_public_runtime_network(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("cybergym_hud.catalog_preflight.task_ids", lambda _root: ())
+    unsafe = {**_runtime_network(), "public_ipv4_blocked": False}
+    with pytest.raises(CatalogPreflightError, match="private-only runtime network"):
+        validate_full_catalog(
+            repository_root=tmp_path,
+            data_dir=tmp_path,
+            source_provenance=None,
+            server_mode="images",
+            server_binary_dir=None,
+            max_concurrent=1,
+            image_identity=lambda _ref: "sha256:test",
+            runtime_limit_probe=_runtime_limits,
+            runtime_network_probe=lambda: unsafe,
+            server_attestation=_server_attestation(),
+            cpu_count=4,
+            memory_bytes=14 * 1024**3,
+        )
 
 
 def test_full_catalog_preflight_rejects_missing_corpus_before_spend(
@@ -322,6 +359,7 @@ def test_full_catalog_preflight_rejects_missing_corpus_before_spend(
                 "memory": 8 * 1024**3,
                 "memory_swap": 8 * 1024**3,
             },
+            runtime_network_probe=_runtime_network,
             server_attestation=_server_attestation(),
             cpu_count=4,
             memory_bytes=14 * 1024**3,
@@ -347,6 +385,7 @@ def test_capacity_gate_rejects_two_rollouts_on_a_16_gib_worker(
                 "memory": 8 * 1024**3,
                 "memory_swap": 8 * 1024**3,
             },
+            runtime_network_probe=_runtime_network,
             server_attestation=_server_attestation(),
             cpu_count=8,
             memory_bytes=16 * 1024**3,
@@ -368,6 +407,7 @@ def test_preflight_rejects_unenforced_runtime_limits(
             max_concurrent=1,
             image_identity=lambda _ref: "sha256:test",
             runtime_limit_probe=lambda: {"nano_cpus": 0, "memory": 0, "memory_swap": 0},
+            runtime_network_probe=_runtime_network,
             server_attestation=_server_attestation(),
             cpu_count=4,
             memory_bytes=14 * 1024**3,
@@ -541,6 +581,7 @@ def test_full_binary_catalog_requires_all_reviewed_absolute_links(
             max_concurrent=1,
             image_identity=lambda _ref: "sha256:test",
             runtime_limit_probe=_runtime_limits,
+            runtime_network_probe=_runtime_network,
             server_attestation=_server_attestation(),
             cpu_count=4,
             memory_bytes=14 * 1024**3,
@@ -581,6 +622,7 @@ def test_binary_preflight_requires_arvo_libraries(
             max_concurrent=1,
             image_identity=lambda _ref: "sha256:test",
             runtime_limit_probe=_runtime_limits,
+            runtime_network_probe=_runtime_network,
             server_attestation=_server_attestation(),
             cpu_count=4,
             memory_bytes=14 * 1024**3,
@@ -613,6 +655,7 @@ def test_binary_preflight_requires_metadata_named_executable(
             max_concurrent=1,
             image_identity=lambda _ref: "sha256:test",
             runtime_limit_probe=_runtime_limits,
+            runtime_network_probe=_runtime_network,
             server_attestation=_server_attestation(),
             cpu_count=4,
             memory_bytes=14 * 1024**3,

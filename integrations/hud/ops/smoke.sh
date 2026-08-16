@@ -58,14 +58,17 @@ DATA_DIR=${CG_DATA_DIR:?CG_DATA_DIR is required}
 SERVER_URL=${CG_SERVER_URL:?CG_SERVER_URL is required}
 MODEL=${CG_MODEL:-gpt-5.6-sol}
 REASONING_EFFORT=${CG_REASONING_EFFORT:-xhigh}
-JOB_NAME=${CG_JOB_NAME:-cybergym-gpt5.6-sol}
+JOB_NAME=${CG_JOB_NAME:-cybergym-gpt5.6-sol-no-internet-v1}
+RUNTIME_NETWORK=${CG_RUNTIME_NETWORK:?CG_RUNTIME_NETWORK is required}
 RESULTS_DIR=${CG_RESULTS_DIR:?CG_RESULTS_DIR is required}
 SERVER_MODE=${CG_SERVER_MODE:-images}
+UV_BIN=${CG_UV_BIN:-uv}
 
 mkdir -p "$RESULTS_DIR/logs" "$RESULTS_DIR/tmp"
 
 if [ -n "${CG_MODEL_BASE_URL:-}" ]; then
-    exec uv run --project "$REPOSITORY_ROOT/integrations/hud" cybergym-hud-run-native \
+    exec "$UV_BIN" run --frozen --no-sync --project "$REPOSITORY_ROOT/integrations/hud" \
+        cybergym-hud-run-native \
         "$TASK_ID" \
         --repository-root "$REPOSITORY_ROOT" \
         --data-dir "$DATA_DIR" \
@@ -79,10 +82,12 @@ if [ -n "${CG_MODEL_BASE_URL:-}" ]; then
         --tmp-dir "$RESULTS_DIR/tmp" \
         --max-iter 10 \
         --timeout 1200 \
-        --max-concurrent 1
+        --max-concurrent 1 \
+        --runtime-network "$RUNTIME_NETWORK"
 fi
 
-exec uv run --project "$REPOSITORY_ROOT/integrations/hud" cybergym-hud-run-native \
+exec "$UV_BIN" run --frozen --no-sync --project "$REPOSITORY_ROOT/integrations/hud" \
+    cybergym-hud-run-native \
     "$TASK_ID" \
     --repository-root "$REPOSITORY_ROOT" \
     --data-dir "$DATA_DIR" \
@@ -95,4 +100,5 @@ exec uv run --project "$REPOSITORY_ROOT/integrations/hud" cybergym-hud-run-nativ
     --tmp-dir "$RESULTS_DIR/tmp" \
     --max-iter 10 \
     --timeout 1200 \
-    --max-concurrent 1
+    --max-concurrent 1 \
+    --runtime-network "$RUNTIME_NETWORK"

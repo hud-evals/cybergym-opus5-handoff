@@ -81,6 +81,10 @@ git -C "$REPOSITORY_ROOT" submodule update --init --recursive examples/agents
 printf '%s\n' 'Installing the HUD integration...'
 uv sync --frozen --project "$REPOSITORY_ROOT/integrations/hud" --extra test
 
+printf '%s\n' 'Ensuring the private-only agent runtime network...'
+uv run --frozen --no-sync --project "$REPOSITORY_ROOT/integrations/hud" \
+    cybergym-hud-runtime-network ensure >/dev/null
+
 if [ "$SKIP_RUNTIME_IMAGE" -eq 0 ]; then
     "$SCRIPT_DIR/runtime-image.sh" ensure
 fi
@@ -99,4 +103,4 @@ fi
 
 uv run --frozen --no-sync --project "$REPOSITORY_ROOT/integrations/hud" cybergym-hud-verify \
     --repository-root "$REPOSITORY_ROOT"
-printf '%s\n' 'Setup complete. Download task data/images, start the private server, then run ops/preflight.sh.'
+printf '%s\n' 'Setup complete. Agent runtimes are pinned to the no-public-egress network.'

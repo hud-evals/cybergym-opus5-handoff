@@ -31,6 +31,8 @@ id "$OPERATOR" >/dev/null 2>&1 || { printf 'install-service: unknown operator: %
     || { printf '%s\n' 'install-service: server.sh is missing or not executable' >&2; exit 1; }
 [ -r /etc/cybergym/server.env ] \
     || { printf '%s\n' 'install-service: run configure-secrets.sh first' >&2; exit 1; }
+"$REPOSITORY_ROOT/integrations/hud/.venv/bin/cybergym-hud-runtime-network" verify >/dev/null \
+    || { printf '%s\n' 'install-service: private-only runtime network is missing or drifted' >&2; exit 1; }
 
 UNIT=/etc/systemd/system/cybergym-server.service
 TMP=$(mktemp /etc/systemd/system/.cybergym-server.XXXXXX)
@@ -72,4 +74,4 @@ systemctl enable cybergym-server.service
 systemctl restart cybergym-server.service
 systemctl is-active --quiet cybergym-server.service \
     || { printf '%s\n' 'install-service: cybergym-server.service did not become active' >&2; exit 1; }
-printf '%s\n' 'Installed and started cybergym-server.service (private Docker-bridge bind, unmasked task IDs).'
+printf '%s\n' 'Installed and started cybergym-server.service (private no-egress network bind, unmasked task IDs).'

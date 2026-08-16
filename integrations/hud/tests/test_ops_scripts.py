@@ -183,7 +183,7 @@ def test_campaign_profile_resume_and_secret_boundaries_are_explicit() -> None:
     for expected in (
         "gpt-5.6-sol",
         "xhigh",
-        "cybergym-gpt5.6-sol",
+        "cybergym-gpt5.6-sol-no-internet-v1",
         "--confirm-paid-all",
         "--max-concurrent",
         "--shard-size",
@@ -200,6 +200,8 @@ def test_campaign_profile_resume_and_secret_boundaries_are_explicit() -> None:
     assert "CYBERGYM_API_KEY" not in campaign
     assert "cybergym-hud-preflight-catalog" in preflight
     assert "full-corpus-preflight.json" in preflight
+    assert "cybergym-no-internet" in campaign
+    assert "campaign-gpt56-sol-200-no-internet-v1" in preflight
     assert "campaign-preflight" in dispatcher
     assert 'exec "$SCRIPT_DIR/campaign.sh"' in dispatcher
 
@@ -234,7 +236,8 @@ def test_smoke_is_exactly_one_task_and_one_slot() -> None:
     assert "--max-iter 10" in text
     assert '--job-name "$JOB_NAME"' in text
     assert '--reasoning-effort "$REASONING_EFFORT"' in text
-    assert "cybergym-gpt5.6-sol" in text
+    assert "cybergym-gpt5.6-sol-no-internet-v1" in text
+    assert '--runtime-network "$RUNTIME_NETWORK"' in text
 
 
 def test_committed_env_template_has_names_but_no_secret_values() -> None:
@@ -254,7 +257,9 @@ def test_committed_env_template_has_names_but_no_secret_values() -> None:
     assert assignments["CG_SMOKE_TASK_ID"] == "arvo:10400"
     assert assignments["CG_MODEL"] == "gpt-5.6-sol"
     assert assignments["CG_REASONING_EFFORT"] == "xhigh"
-    assert assignments["CG_JOB_NAME"] == "cybergym-gpt5.6-sol"
+    assert assignments["CG_JOB_NAME"] == "cybergym-gpt5.6-sol-no-internet-v1"
+    assert assignments["CG_RUNTIME_NETWORK"] == "cybergym-no-internet"
+    assert assignments["CG_SERVER_URL"] == "http://172.30.0.1:8666"
     assert assignments["CG_SERVER_MODE"] == "images"
     assert assignments["CG_SERVER_BINARY_DIR"] == ""
 
@@ -285,10 +290,12 @@ def test_secret_entry_and_dispatch_never_put_values_in_argv() -> None:
     assert 'exec "$SCRIPT_DIR/smoke.sh"' in dispatcher
 
 
-def test_private_server_is_unmasked_and_docker_bridge_only() -> None:
+def test_private_server_is_unmasked_and_internal_network_only() -> None:
     server = (OPS / "server.sh").read_text(encoding="utf-8")
     installer = (OPS / "install-service.sh").read_text(encoding="utf-8")
-    assert "docker network inspect bridge" in server
+    assert 'docker network inspect "$CG_RUNTIME_NETWORK"' in server
+    assert "172.30.0.1" in server
+    assert "cybergym-hud-runtime-network verify" in server
     assert "public default is forbidden" in server
     assert "--mask_map_path" in server  # only in the explanatory no-mask comment
     assert 'set -- "$@" --binary_dir' in server

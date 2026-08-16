@@ -66,6 +66,7 @@ class FakeUpstream:
     LLMArgs = Box
     OpenhandsArgs = Box
     TaskArgs = Box
+    subprocess = subprocess
 
     def __init__(self, *, fail: bool = False, return_none: bool = False):
         self.uuid4 = lambda: UUID(int=99)
@@ -200,6 +201,7 @@ def test_runtime_limits_are_coherent_and_receipted(config: NativeOpenHandsConfig
     assert profile.runtime_nano_cpus == 4_000_000_000
     assert profile.runtime_memory_bytes == 8 * 1024**3
     assert profile.runtime_memory_swap_bytes == 8 * 1024**3
+    assert profile.network_mode == "cybergym-docker-internal-no-public-egress-v1"
     with pytest.raises(ValueError, match="together"):
         replace(config, runtime_nano_cpus=4_000_000_000).normalized()
     with pytest.raises(ValueError, match="may not be lower"):
@@ -209,6 +211,8 @@ def test_runtime_limits_are_coherent_and_receipted(config: NativeOpenHandsConfig
             runtime_memory_bytes=8 * 1024**3,
             runtime_memory_swap_bytes=4 * 1024**3,
         ).normalized()
+    with pytest.raises(ValueError, match="unsupported runtime network"):
+        replace(config, runtime_network=None).normalized()  # type: ignore[arg-type]
 
 
 def test_openhands_subprocess_proxy_injects_only_the_exact_child(tmp_path: Path) -> None:
@@ -223,6 +227,7 @@ def test_openhands_subprocess_proxy_injects_only_the_exact_child(tmp_path: Path)
 
     runtime_kwargs = {
         "auto_remove": True,
+        "network": "cybergym-no-internet",
         "nano_cpus": 4_000_000_000,
         "mem_limit": 8 * 1024**3,
         "memswap_limit": 8 * 1024**3,
@@ -252,6 +257,7 @@ def test_openhands_subprocess_proxy_injects_only_the_exact_child(tmp_path: Path)
     }
     rendered = config_path.read_text(encoding="utf-8")
     assert "nano_cpus = 4000000000" in rendered
+    assert 'network = "cybergym-no-internet"' in rendered
     assert "mem_limit = 8589934592" in rendered
     assert "memswap_limit = 8589934592" in rendered
     assert config_path.stat().st_mode & 0o777 == 0o600

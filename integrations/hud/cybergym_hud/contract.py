@@ -142,6 +142,18 @@ def validate_contract(
         "recovery": "pull_official_ghcr_immutable_platform_manifest_then_apply_upstream_reference_as_local_tag",
     }:
         raise ValueError("pinned OpenHands runtime artifact identity drifted")
+    if runtime["network_policy"] != {
+        "policy": "docker-internal-no-public-egress-v1",
+        "network": "cybergym-no-internet",
+        "subnet": "172.30.0.0/24",
+        "gateway": "172.30.0.1",
+        "controller_endpoint": "http://172.30.0.1:8666",
+        "agent_public_ipv4_egress": False,
+        "agent_public_dns": False,
+        "host_model_and_hud_egress": True,
+        "preflight": "fresh_runtime_container_proves_controller_reachable_and_public_ip_dns_blocked",
+    }:
+        raise ValueError("runtime network isolation policy drifted")
     if runtime["hud_role"] != "scheduler_receipt_filetracking_and_selected_openhands_trajectory_projection":
         raise ValueError("HUD must not replace the upstream agent or execution path")
     if runtime["trajectory_projection"] != {
@@ -229,7 +241,7 @@ def validate_contract(
         "reasoning_effort": "xhigh",
         "max_iterations": 200,
         "timeout_seconds": 3600,
-        "job_name": "cybergym-gpt5.6-sol",
+        "job_name": "cybergym-gpt5.6-sol-no-internet-v1",
         "rolling_max_concurrent": 6,
         "default_shard_size": 12,
         "source_repository": "sunblaze-ucb/cybergym",
@@ -241,6 +253,8 @@ def validate_contract(
         "runtime_nano_cpus": 4_000_000_000,
         "runtime_memory_bytes": 8 * 1024**3,
         "runtime_memory_swap_bytes": 8 * 1024**3,
+        "runtime_network": "cybergym-no-internet",
+        "runtime_network_policy": "docker-internal-no-public-egress-v1",
         "restart_policy": "durable_launch_journal_plus_remote_hud_receipt_reconciliation",
     }:
         raise ValueError("paid campaign profile drifted")

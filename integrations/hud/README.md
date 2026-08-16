@@ -248,7 +248,7 @@ sudo uv run --frozen --no-sync --project integrations/hud \
   cybergym-hud-attest-grader capture \
   --repository-root "$PWD" \
   --binary-dir /srv/cybergym/cybergym-server-data \
-  --server-url http://172.17.0.1:8666 \
+  --server-url http://172.30.0.1:8666 \
   --seal /etc/cybergym/server-attestation.json
 ```
 
@@ -307,7 +307,8 @@ The direct OpenAI smoke profile uses the pinned-upstream-compatible bare model
 name `gpt-5.6-sol`, `CG_REASONING_EFFORT=xhigh`, `OPENAI_API_KEY`, and an empty
 `CG_MODEL_BASE_URL`. Do not prefix that name with `openai/`: this old upstream
 wrapper uses a different environment-variable branch for already-prefixed
-names. The operator smoke passes `--job-name cybergym-gpt5.6-sol`, so that is
+names. The operator smoke passes
+`--job-name cybergym-gpt5.6-sol-no-internet-v1`, so that is
 the exact human-facing HUD Job name; the native receipt separately retains the
 actual model, reasoning effort, compatibility transport, and omitted sampling
 parameters, plus the stored-Response continuation choice. `DAYTONA_API_KEY` is
@@ -317,8 +318,9 @@ not used by this native CyberGym path.
 
 The server must be reachable from both the Linux host and OpenHands containers,
 but must never be public. On a non-systemd development host, source the private
-file and use the same reviewed server helper; it queries and binds Docker's
-default bridge and carries `CG_SERVER_MODE` (including `--binary_dir` when
+file and use the same reviewed server helper; it verifies and binds the exact
+internal `cybergym-no-internet` Docker network and carries `CG_SERVER_MODE`
+(including `--binary_dir` when
 selected) consistently into the live process:
 
 ```bash
@@ -331,10 +333,12 @@ selected) consistently into the live process:
 )
 ```
 
-Put the same computed `CG_SERVER_URL` in the private environment file used by
-the runner. If a firewall-created internal Docker network is used, query that
-network's gateway instead. Do not use `127.0.0.1`: it points back to each agent
-container from inside Docker.
+Use `CG_SERVER_URL=http://172.30.0.1:8666` and
+`CG_RUNTIME_NETWORK=cybergym-no-internet` in the private environment. The
+network is Docker-internal: agent containers can reach the private grader but
+cannot route to public IPv4 or resolve public DNS. Model and HUD requests occur
+in the host controller and retain their required provider access. Do not use
+`127.0.0.1`: it points back to each agent container from inside Docker.
 
 For a durable worker, install the reviewed service after configuring secrets:
 
@@ -346,7 +350,7 @@ systemctl status --no-pager cybergym-server.service
 
 The service runs this pinned checkout, deliberately passes no
 `--mask_map_path` because this OpenHands profile submits real task IDs, and
-binds only to the default Docker bridge gateway. It never binds the private
+binds only to the reviewed internal Docker-network gateway. It never binds the private
 routes to `0.0.0.0`, LAN, or Tailscale. A previously deployed masked leaderboard
 server is incompatible with this profile and must not be reused. The installer
 uses a new result-root database and does not delete historical server logs.
@@ -400,14 +404,15 @@ outcome; use the documented 100-iteration profile for benchmark campaigns.
 The durable campaign operator fixes the requested arm to `gpt-5.6-sol` with
 `xhigh` reasoning, 200 maximum OpenHands iterations, a 3,600-second per-task
 timeout, the unchanged native task setup/grader, and the exact HUD Job name
-`cybergym-gpt5.6-sol`. This is a clearly receipted custom budget profile; it is
+`cybergym-gpt5.6-sol-no-internet-v1`. This is a clearly receipted custom budget profile; it is
 not the paper's 100-iteration/1,200-second profile.
 
 First validate the entire 1,507-task corpus without inference or provider
 spend. In addition to the common preflight, this reads every description and
 source tarball, verifies every selected image/binary grader artifact, records
-source/grader SHA-256 fingerprints, and checks worker capacity for the
-requested width. `CG_DATA_PROVENANCE` must point at the verified,
+source/grader SHA-256 fingerprints, proves private grader reachability plus
+blocked public IPv4 and DNS from the exact runtime image, and checks worker
+capacity for the requested width. `CG_DATA_PROVENANCE` must point at the verified,
 mode-protected `PROVENANCE.json` for the pinned selective dataset revision;
 the preflight pins the independently reviewed provenance SHA-256
 `9246b82a...f48cb5`, the selected-manifest SHA-256 `62020973...a97ea`, and
@@ -452,9 +457,10 @@ mode-0600 shard receipt and restart it manually after resolving the cause.
 
 The same command resumes the same manifest. The catalog is partitioned in
 sorted, deterministic 12-task shards by default (`--shard-size 1..24`). Each
-attempt gets its own HUD Job, all named exactly `cybergym-gpt5.6-sol`, and an
+attempt gets its own HUD Job, all named exactly
+`cybergym-gpt5.6-sol-no-internet-v1`, and an
 atomically written mode-0600 summary under
-`$CG_RESULTS_DIR/campaign-gpt56-sol-200/shards/`. The manifest is journaled
+`$CG_RESULTS_DIR/campaign-gpt56-sol-200-no-internet-v1/shards/`. The manifest is journaled
 before each native executor can call the model. On restart, terminal/rewarded
 HUD traces with nonempty events are retained and never rerun; rows that never
 crossed the durable launch marker remain eligible for a later attempt. A
@@ -499,6 +505,7 @@ checks:
     --job-name "$CG_JOB_NAME" \
     --base-url "$CG_MODEL_BASE_URL" \
     --grader-server-mode "$CG_SERVER_MODE" \
+    --runtime-network "$CG_RUNTIME_NETWORK" \
     --log-dir "$CG_RESULTS_DIR/logs" \
     --tmp-dir "$CG_RESULTS_DIR/tmp" \
     --max-iter 100 --timeout 1200 --max-concurrent 15
@@ -536,6 +543,7 @@ cover the complete catalog:
     --job-name "$CG_JOB_NAME" \
     --base-url "$CG_MODEL_BASE_URL" \
     --grader-server-mode "$CG_SERVER_MODE" \
+    --runtime-network "$CG_RUNTIME_NETWORK" \
     --log-dir "$CG_RESULTS_DIR/logs" \
     --tmp-dir "$CG_RESULTS_DIR/tmp" \
     --max-iter 100 --timeout 1200 --max-concurrent 15

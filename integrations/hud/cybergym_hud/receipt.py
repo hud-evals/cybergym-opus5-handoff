@@ -55,7 +55,10 @@ class NativeRunProfile(BaseModel):
     runtime_nano_cpus: int | None = Field(default=None, gt=0)
     runtime_memory_bytes: int | None = Field(default=None, gt=0)
     runtime_memory_swap_bytes: int | None = Field(default=None, gt=0)
-    network_mode: Literal["upstream-openhands-native-docker-default"] = "upstream-openhands-native-docker-default"
+    network_mode: Literal[
+        "upstream-openhands-native-docker-default",
+        "cybergym-docker-internal-no-public-egress-v1",
+    ] = "upstream-openhands-native-docker-default"
     upstream_commit: Literal["7656b71d07da6694e262f9c34ea994cd4849c0eb"] = "7656b71d07da6694e262f9c34ea994cd4849c0eb"
     agent_commit: Literal["b5cbe061b25e5719d296711706710438f6693079"] = "b5cbe061b25e5719d296711706710438f6693079"
 
