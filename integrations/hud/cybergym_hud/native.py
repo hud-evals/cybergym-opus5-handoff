@@ -9,6 +9,7 @@ import os
 import re
 import stat
 import threading
+import time
 import tomllib
 from collections.abc import Awaitable, Callable, Mapping
 from concurrent.futures import Executor, Future
@@ -26,7 +27,7 @@ from hud.telemetry import flush as flush_telemetry
 from hud.telemetry.context import get_current_trace_id
 from hud.types import Step
 
-from .artifact_storage import enforce_private_file_mode
+from .artifact_storage import enforce_private_file_mode, is_trusted_artifact_volume_path
 from .contract import OG_PROMPT, openhands_system_prompt, repository_root, validate_contract
 from .openhands_trace import (
     ProjectedStep,
@@ -215,6 +216,36 @@ _MAX_OUTPUT_TOKENS_EXHAUSTED_REASON = (
     "RuntimeError: There was an unexpected error while running the agent: "
     "CyberGymMaxOutputTokensExhaustedError. You can refresh the page or ask the agent to try again."
 )
+_MAX_SAVED_TRAJECTORY_BYTES = 128 * 1024 * 1024
+
+
+def _wait_for_volume_trajectory(receipt_log_dir: Path, *, timeout: float = 30.0) -> bool:
+    """Wait for an attached Daytona volume to expose a completed trajectory."""
+
+    trajectory = receipt_log_dir / "trajectory"
+    if not is_trusted_artifact_volume_path(trajectory):
+        return False
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            before = trajectory.lstat()
+            if not stat.S_ISREG(before.st_mode) or before.st_size <= 0 or before.st_size > _MAX_SAVED_TRAJECTORY_BYTES:
+                time.sleep(0.2)
+                continue
+            payload = json.loads(trajectory.read_text(encoding="utf-8"))
+            time.sleep(0.2)
+            after = trajectory.lstat()
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            time.sleep(0.2)
+            continue
+        if (
+            isinstance(payload, list)
+            and payload
+            and (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+            == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+        ):
+            return True
+    return False
 
 
 def _classify_error_reasons(
@@ -677,6 +708,8 @@ def execute_upstream_openhands(
         if not trace_setup_failed:
             try:
                 returned = upstream.run_with_configs(openhands_args, task_args)
+                if returned is None and _wait_for_volume_trajectory(receipt_log_dir):
+                    returned = agent_id
             except Exception as exc:
                 upstream_error = exc
     finally:

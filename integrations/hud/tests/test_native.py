@@ -27,6 +27,7 @@ from cybergym_hud.native import (
     _controller_termination,
     _make_openhands_trace_tailer,
     _OpenHandsSubprocessProxy,
+    _wait_for_volume_trajectory,
     execute_upstream_openhands,
 )
 from cybergym_hud.openhands_trace import (
@@ -84,6 +85,25 @@ class FakeUpstream:
         agent_id = self.uuid4().hex
         _write_controller_states(openhands_args, task_args, agent_id, [("finished", "")])
         return agent_id
+
+
+def test_wait_for_daytona_volume_trajectory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    volume = tmp_path / "artifacts"
+    receipt = volume / "run"
+    receipt.mkdir(parents=True)
+    monkeypatch.setenv("CG_DAYTONA_ARTIFACT_VOLUME_ROOT", str(volume))
+
+    def publish() -> None:
+        (receipt / "trajectory").write_text(json.dumps([{"source": "user"}]), encoding="utf-8")
+
+    thread = threading.Thread(target=publish)
+    thread.start()
+    assert _wait_for_volume_trajectory(receipt, timeout=2.0) is True
+    thread.join()
+    assert _wait_for_volume_trajectory(tmp_path / "outside", timeout=0.1) is False
 
 
 @pytest.fixture
