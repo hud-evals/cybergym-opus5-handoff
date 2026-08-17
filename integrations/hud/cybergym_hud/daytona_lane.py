@@ -232,23 +232,32 @@ def _wait_action_server(url: str, *, timeout: float = 120.0) -> None:
 
 
 def _require_blocked_network(sandbox: Any, *, relay_base_url: str) -> None:
-    web = sandbox.process.exec(
-        "curl -fsS --max-time 5 https://github.com >/dev/null 2>&1; test $? -ne 0",
-        timeout=15,
+    deadline = time.monotonic() + 60
+    observed = (-1, -1, -1)
+    while time.monotonic() < deadline:
+        web = sandbox.process.exec(
+            "curl -fsS --max-time 5 https://github.com >/dev/null 2>&1; test $? -ne 0",
+            timeout=15,
+        )
+        ip = sandbox.process.exec(
+            'python3 -c "import socket,sys; s=socket.socket(); s.settimeout(3); '
+            "\ntry: s.connect(('1.1.1.1',443))"
+            "\nexcept OSError: sys.exit(0)"
+            '\nsys.exit(1)"',
+            timeout=15,
+        )
+        relay = sandbox.process.exec(
+            f"curl -fsS --max-time 10 {relay_base_url}/healthz >/dev/null",
+            timeout=15,
+        )
+        observed = (web.exit_code, ip.exit_code, relay.exit_code)
+        if observed == (0, 0, 0):
+            return
+        time.sleep(2)
+    raise RuntimeError(
+        "Daytona network isolation or task relay proof failed: "
+        f"web_block={observed[0]}, raw_ip_block={observed[1]}, relay={observed[2]}"
     )
-    ip = sandbox.process.exec(
-        'python3 -c "import socket,sys; s=socket.socket(); s.settimeout(3); '
-        "\ntry: s.connect(('1.1.1.1',443))"
-        "\nexcept OSError: sys.exit(0)"
-        '\nsys.exit(1)"',
-        timeout=15,
-    )
-    relay = sandbox.process.exec(
-        f"curl -fsS --max-time 10 {relay_base_url}/healthz >/dev/null",
-        timeout=15,
-    )
-    if web.exit_code != 0 or ip.exit_code != 0 or relay.exit_code != 0:
-        raise RuntimeError("Daytona network isolation or task relay proof failed")
 
 
 def _delete_exact(daytona: Daytona, sandbox: Any) -> None:
