@@ -103,11 +103,11 @@
       "provider_retries": "pinned_openhands_litellm_retry_policy",
       "cost_accounting": "provider_usage_reported_by_pinned_openhands",
       "served_model_identity": "claude-opus-5_pinned_snapshot",
-      "transport_omits": ["temperature", "reasoning_effort"],
+      "transport_omits": ["temperature", "top_p", "reasoning_effort"],
       "protected_upstream_sources_modified": false,
       "shim_sha256": {
         "openhands_shim/sitecustomize.py": "61c205ff73a2c6575cdbe92d329ed00102d9754bead7a0535b2bdc1d0c104635",
-        "openhands_shim/_cybergym_openhands_compat.py": "7690dcbef94118d2839bd636d8b604f16e16c78389976fc6da53e980f139e988"
+        "openhands_shim/_cybergym_openhands_compat.py": "dfb69f57a48bc6a9ef140b33eaaaaacfa5238709c6bf250e647b64cd8a9f7ab7"
       }
     },
     "agent_id": "fresh_uuid4_per_rollout",

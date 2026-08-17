@@ -1058,7 +1058,6 @@ def test_claude_opus5_patch_omits_deprecated_temperature(
     assert target._completion_unwrapped.keywords == {
         "model": "claude-opus-5",
         "api_key": "fake",
-        "top_p": 1.0,
     }
     non_target = LLM("claude-sonnet-5")
     assert non_target._completion_unwrapped.keywords["temperature"] == 0.0

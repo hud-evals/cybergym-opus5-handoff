@@ -219,7 +219,7 @@ def test_claude_opus_5_direct_profile_is_receipted(config: NativeOpenHandsConfig
     assert profile.reasoning_transport == "none"
     assert profile.response_storage == "none"
     assert profile.response_continuation == "none"
-    assert profile.omitted_sampling_parameters == ("temperature",)
+    assert profile.omitted_sampling_parameters == ("temperature", "top_p")
 
 
 def test_runtime_limits_are_coherent_and_receipted(config: NativeOpenHandsConfig) -> None:
@@ -359,7 +359,7 @@ def test_subprocess_proxy_omits_only_deprecated_claude_temperature(tmp_path: Pat
     rendered = config_path.read_text(encoding="utf-8")
     assert 'model = "claude-opus-5"' in rendered
     assert "temperature" not in rendered
-    assert "top_p = 1.0" in rendered
+    assert "top_p" not in rendered
     assert "CYBERGYM_REASONING_EFFORT" not in calls[0][2]["env"]
     assert calls[0][2]["env"]["CYBERGYM_ANTHROPIC_MODEL"] == "claude-opus-5"
 

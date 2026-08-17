@@ -707,6 +707,9 @@ def _patch_claude_llm_instances(llm: Any) -> None:
         temperature = keywords.pop("temperature", None)
         if isinstance(temperature, bool) or not isinstance(temperature, int | float) or float(temperature) != 0.0:
             raise RuntimeError("pinned OpenHands Claude temperature default drifted")
+        top_p = keywords.pop("top_p", None)
+        if isinstance(top_p, bool) or not isinstance(top_p, int | float) or float(top_p) != 1.0:
+            raise RuntimeError("pinned OpenHands Claude top_p default drifted")
         self._completion_unwrapped = functools.partial(original.func, *original.args, **keywords)
 
     patched_init._cybergym_claude_opus5 = True

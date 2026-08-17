@@ -178,7 +178,7 @@ class NativeOpenHandsConfig:
             omitted_sampling_parameters=(
                 ("temperature", "top_p", "stop")
                 if self.reasoning_effort
-                else (("temperature",) if self.model == "claude-opus-5" else ())
+                else (("temperature", "top_p") if self.model == "claude-opus-5" else ())
             ),
             max_iter=self.max_iter,
             timeout_seconds=self.timeout,
@@ -373,6 +373,9 @@ def _omit_deprecated_claude_sampling(config_path: Path) -> None:
     temperature = llm.pop("temperature", None)
     if isinstance(temperature, bool) or not isinstance(temperature, int | float) or float(temperature) != 0.0:
         raise RuntimeError("OpenHands Claude temperature default drifted")
+    top_p = llm.pop("top_p", None)
+    if isinstance(top_p, bool) or not isinstance(top_p, int | float) or float(top_p) != 1.0:
+        raise RuntimeError("OpenHands Claude top_p default drifted")
     encoded = tomli_w.dumps(config).encode()
     temporary = config_path.with_name(f".{config_path.name}.claude.tmp")
     descriptor = os.open(
