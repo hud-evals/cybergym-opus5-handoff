@@ -660,14 +660,22 @@ async def reconcile_running_attempt(
     summary_path = state.shard_summary_dir / (
         f"shard-{shard_index + 1:04d}-attempt-{attempt['number']:02d}-{attempt['job_id']}-recovered.json"
     )
-    write_summary(summary_path, recovered)
     has_errors = any(
         row.get("status") in {"error", "cancelled"} or _uuid_key(row["id"]) in grader_error_ids for row in terminal_rows
     )
+    retry_task_ids = [
+        task_id
+        for task_id, row in zip(terminal, terminal_rows, strict=True)
+        if row.get("status") in {"error", "cancelled"} or _uuid_key(row["id"]) in grader_error_ids
+    ]
+    completed_task_ids = [task_id for task_id in terminal if task_id not in set(retry_task_ids)]
+    recovered["completed_task_ids"] = completed_task_ids
+    recovered["retry_task_ids"] = retry_task_ids
+    write_summary(summary_path, recovered)
     state.complete_attempt(
         shard_index,
         attempt["number"],
-        completed_task_ids=terminal,
+        completed_task_ids=completed_task_ids,
         status="recovered",
         summary_path=summary_path,
         has_errors=has_errors,

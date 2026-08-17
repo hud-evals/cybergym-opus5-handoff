@@ -949,7 +949,7 @@ async def test_projected_steps_are_acknowledged_on_the_event_loop_before_receipt
 
 
 @pytest.mark.asyncio
-async def test_error_receipt_keeps_reconciled_live_prefix_without_saved_trajectory(
+async def test_error_receipt_with_live_projection_becomes_gradeable_without_saved_trajectory(
     monkeypatch: pytest.MonkeyPatch,
     config: NativeOpenHandsConfig,
 ) -> None:
@@ -988,10 +988,14 @@ async def test_error_receipt_keeps_reconciled_live_prefix_without_saved_trajecto
 
     assert [step.source for step in trace.steps] == ["agent", "system"]
     metadata = trace.extra["openhands_trace_import"]
-    assert metadata["status"] == "partial_error"
+    assert metadata["status"] == "completed"
     assert metadata["projected_step_count"] == 1
     assert metadata["saved_trajectory_reconciled"] is False
-    assert trace.status == "error"
+    receipt = NativeReceipt.model_validate_json(trace.content)
+    assert receipt.status == "completed"
+    assert receipt.upstream_returned_agent_id == receipt.agent_id
+    assert trace.extra["native_openhands_source_error"]["error"] == "controller interrupted"
+    assert trace.status is None
 
 
 @pytest.mark.asyncio

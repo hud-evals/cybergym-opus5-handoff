@@ -478,7 +478,9 @@ async def test_restart_halts_on_completed_trace_with_remote_grader_error(tmp_pat
 
     await reconcile_running_attempt(state, 0, state.shard(0)["attempts"][0], client=Client())
     assert state.payload["halt"]["job_id"] == "job-1"
-    assert state.shard(0)["status"] == "verified_with_errors"
+    assert state.shard(0)["status"] == "pending"
+    assert state.shard(0)["completed_task_ids"] == []
+    assert state.pending_task_ids(0) == ids
 
 
 @pytest.mark.asyncio

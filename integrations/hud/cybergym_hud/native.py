@@ -928,6 +928,29 @@ async def _run_and_record(
                 error=f"native scheduler failed: {type(exc).__name__}: {exc}",
             )
 
+    source_error_receipt: dict[str, Any] | None = None
+    if receipt.status == "error" and receipt.agent_id and receipt.log_dir and len(live_projections) == 1:
+        # A controller timeout/exception after a visible model turn is a
+        # gradeable failed benchmark attempt, not missing paid work. Promote
+        # only the exact, already-captured semantic projection; the strict
+        # import/reconciliation block below still fails closed on malformed or
+        # divergent saved data. This prevents an otherwise valid rollout from
+        # requiring a second model call merely because upstream returned via
+        # its error path.
+        candidate_metadata = build_trace_import_metadata(live_projections[0], status="completed")
+        if candidate_metadata.get("agent_step_count", 0) >= 1:
+            source_error_receipt = receipt.model_dump(mode="json")
+            recovered = receipt.model_dump(mode="python")
+            recovered.update(
+                {
+                    "status": "completed",
+                    "upstream_returned_agent_id": receipt.agent_id,
+                    "controller_termination": None,
+                    "error": None,
+                }
+            )
+            receipt = NativeReceipt.model_validate(recovered)
+
     projection_receipt = receipt
     try:
         flushed = await asyncio.to_thread(flush_telemetry, 30.0)
@@ -995,6 +1018,7 @@ async def _run_and_record(
         {
             "runner": receipt.runner,
             "native_openhands_receipt": payload,
+            "native_openhands_source_error": source_error_receipt,
             "agent_config": {"system_prompt": openhands_system_prompt(config.repository_root)},
             "openhands_trace_import": import_metadata,
         }
@@ -1005,6 +1029,7 @@ async def _run_and_record(
             source="system",
             extra={
                 "native_openhands_receipt": payload,
+                "native_openhands_source_error": source_error_receipt,
                 "openhands_trace_import": import_metadata,
             },
         )
