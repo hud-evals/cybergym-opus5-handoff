@@ -18,6 +18,7 @@ from hud.eval.runtime import LocalRuntime
 from hud.settings import settings
 from hud.utils.platform import PlatformClient
 
+from .artifact_storage import enforce_private_file_mode
 from .cleanup import cleanup_tracked_root
 from .contract import validate_contract
 from .env import build_env
@@ -153,7 +154,7 @@ def write_summary(path: Path, payload: dict[str, Any]) -> None:
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(temporary, flags, 0o600)
     try:
-        os.fchmod(descriptor, 0o600)
+        enforce_private_file_mode(descriptor, path)
         remaining = memoryview(encoded)
         while remaining:
             written = os.write(descriptor, remaining)

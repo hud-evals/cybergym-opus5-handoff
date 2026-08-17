@@ -31,6 +31,8 @@ from daytona import (
     SessionExecuteRequest,
 )
 
+from .artifact_storage import enforce_private_file_mode, has_private_storage
+
 DAYTONA_IMAGE = "ghcr.io/all-hands-ai/runtime@sha256:ff8d9ef50ceb475130de5bca59d5c8f4dc9c45e11566ebaa6cae6a95b388d989"
 ACTION_PORT = 4444
 GRADER_TUNNEL_PORT = 8666
@@ -91,7 +93,7 @@ def record_sandbox_event(
         0o600,
     )
     try:
-        os.fchmod(descriptor, 0o600)
+        enforce_private_file_mode(descriptor, path)
         _write_all(descriptor, (json.dumps(payload, sort_keys=True) + "\n").encode())
         os.fsync(descriptor)
     finally:
@@ -109,7 +111,11 @@ def open_sandbox_bindings(path: Path) -> dict[str, str]:
     if not path.exists():
         return {}
     before = path.lstat()
-    if not stat.S_ISREG(before.st_mode) or before.st_mode & 0o077 or before.st_size > MAX_LEDGER_BYTES:
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or not has_private_storage(path, before.st_mode)
+        or before.st_size > MAX_LEDGER_BYTES
+    ):
         raise RuntimeError("Daytona sandbox ledger is not a private bounded regular file")
     descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     try:
