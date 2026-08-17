@@ -398,7 +398,28 @@ class _OpenHandsSubprocessProxy:
                     )
                     child_env["CYBERGYM_DAYTONA_ACTION_URL"] = runtime.action_url
                     kwargs["env"] = child_env
-                    return self._delegate.run(command, *args, **kwargs)
+                    private_log_root = Path(child_env["LOG_DIR"]).parent
+                    private_log_root.mkdir(parents=True, exist_ok=True)
+                    descriptor = os.open(
+                        private_log_root / "daytona-controller.log",
+                        os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
+                        0o600,
+                    )
+                    try:
+                        os.fchmod(descriptor, 0o600)
+                        with os.fdopen(descriptor, "wb", closefd=False) as output:
+                            kwargs["stdout"] = output
+                            kwargs["stderr"] = getattr(self._delegate, "STDOUT", -2)
+                            completed = self._delegate.run(command, *args, **kwargs)
+                            output.flush()
+                            os.fsync(descriptor)
+                    finally:
+                        os.close(descriptor)
+                    if getattr(completed, "returncode", 0) != 0:
+                        raise RuntimeError(
+                            "pinned OpenHands Daytona child exited nonzero; inspect private controller log"
+                        )
+                    return completed
             except (OSError, ValueError, tomllib.TOMLDecodeError) as exc:
                 raise RuntimeError("could not prepare the private Daytona runtime") from exc
         if self._runtime_kwargs is not None:

@@ -343,10 +343,17 @@ def test_openhands_subprocess_proxy_uses_private_daytona_attachment(
         str(config_path),
     ]
 
-    assert proxy.run(command, env={"LLM_API_KEY": "secret"}) == "done"
+    assert (
+        proxy.run(
+            command,
+            env={"LLM_API_KEY": "secret", "LOG_DIR": str(tmp_path / "private/logs")},
+        )
+        == "done"
+    )
     assert configured == [True]
     assert calls[0][2]["env"] == {
         "LLM_API_KEY": "secret",
+        "LOG_DIR": str(tmp_path / "private/logs"),
         "PYTHONPATH": str(tmp_path / "shim"),
         "CYBERGYM_REASONING_EFFORT": "xhigh",
         "CYBERGYM_DAYTONA_ACTION_URL": "http://127.0.0.1:43210",
@@ -354,6 +361,7 @@ def test_openhands_subprocess_proxy_uses_private_daytona_attachment(
     assert (workspace / "submit.sh").read_text() == (
         "curl --resolve relay.example:443:203.0.113.10 -X POST https://relay.example/token/submit-vul\n"
     )
+    assert (tmp_path / "private/daytona-controller.log").stat().st_mode & 0o777 == 0o600
 
 
 @pytest.mark.asyncio
