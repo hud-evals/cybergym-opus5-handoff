@@ -49,7 +49,7 @@ CAMPAIGN_MODEL = "claude-opus-5"
 CAMPAIGN_REASONING_EFFORT = None
 CAMPAIGN_MAX_ITER = 200
 CAMPAIGN_TIMEOUT_SECONDS = 3600
-CAMPAIGN_MAX_OUTPUT_TOKENS = 8192
+CAMPAIGN_MAX_OUTPUT_TOKENS = 16000
 CAMPAIGN_MAX_CONCURRENT = 6
 DEFAULT_SHARD_SIZE = 12
 MAX_SHARD_SIZE = 24
@@ -123,7 +123,7 @@ def validate_campaign_profile(config: NativeOpenHandsConfig, *, max_concurrent: 
     expected = {
         "model": CAMPAIGN_MODEL,
         "reasoning_effort": CAMPAIGN_REASONING_EFFORT,
-        "anthropic_effort": "medium",
+        "anthropic_effort": "low",
         "max_iter": CAMPAIGN_MAX_ITER,
         "timeout": CAMPAIGN_TIMEOUT_SECONDS,
         "top_p": 1.0,

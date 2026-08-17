@@ -39,7 +39,7 @@ class NativeRunProfile(BaseModel):
     budget_profile: Literal["paper-eval-100", "script-default-10", "custom"]
     model: str = Field(min_length=1)
     reasoning_effort: Literal["xhigh"] | None = None
-    anthropic_effort: Literal["medium"] | None = None
+    anthropic_effort: Literal["low"] | None = None
     reasoning_transport: Literal["none", "gpt56_openai_responses_bridge"] = "none"
     response_storage: Literal["none", "openai_store_true"] = "none"
     response_continuation: Literal["none", "per_llm_previous_response_id_exact_transcript_extensions"] = "none"

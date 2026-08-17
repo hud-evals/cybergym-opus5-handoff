@@ -194,7 +194,7 @@ def validate_contract(
         "label": "upstream-openhands-0.33-claude-opus-5-direct-anthropic",
         "model": "claude-opus-5",
         "reasoning_effort": None,
-        "adaptive_effort": "medium",
+        "adaptive_effort": "low",
         "endpoint": "anthropic_messages",
         "injection": "pinned_upstream_native_litellm_anthropic_provider",
         "native_function_calling_enabled": True,
@@ -210,7 +210,7 @@ def validate_contract(
         "shim_sha256": {
             "openhands_shim/sitecustomize.py": "61c205ff73a2c6575cdbe92d329ed00102d9754bead7a0535b2bdc1d0c104635",
             "openhands_shim/_cybergym_openhands_compat.py": (
-                "35bb154e68b29ff5337d45384e195be3e823745ed45328cbeb00599d62e664d4"
+                "e0ceee447c1297051644b19bfabb3f6e9e34a5f3884b6dc8e512bdf4f8db93bc"
             ),
         },
     }:
@@ -243,9 +243,9 @@ def validate_contract(
     if runtime["paid_campaign"] != {
         "model": "claude-opus-5",
         "reasoning_effort": None,
-        "adaptive_effort": "medium",
+        "adaptive_effort": "low",
         "max_iterations": 200,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 16000,
         "timeout_seconds": 3600,
         "job_name": "cybergym-claude-opus-5-no-internet-v1",
         "rolling_max_concurrent": 6,

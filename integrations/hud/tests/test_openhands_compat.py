@@ -1071,7 +1071,7 @@ def test_claude_opus5_patch_omits_deprecated_temperature(
     monkeypatch.delenv("CYBERGYM_RUNTIME_NETWORK", raising=False)
     monkeypatch.setenv("CYBERGYM_DAYTONA_ACTION_URL", "http://127.0.0.1:43210")
     monkeypatch.setenv("CYBERGYM_ANTHROPIC_MODEL", "claude-opus-5")
-    monkeypatch.setenv("CYBERGYM_ANTHROPIC_EFFORT", "medium")
+    monkeypatch.setenv("CYBERGYM_ANTHROPIC_EFFORT", "low")
 
     assert compat.install() is True
     target = LLM()
@@ -1084,7 +1084,7 @@ def test_claude_opus5_patch_omits_deprecated_temperature(
     config = AnthropicConfig()
     assert config.transform_request("claude-opus-5", [], {}, {}, {}) == {
         "model": "claude-opus-5",
-        "output_config": {"effort": "medium"},
+        "output_config": {"effort": "low"},
     }
     assert config.transform_request("claude-sonnet-5", [], {}, {}, {}) == {"model": "claude-sonnet-5"}
 

@@ -59,7 +59,7 @@ class NativeOpenHandsConfig:
     log_dir: Path
     tmp_dir: Path
     reasoning_effort: Literal["xhigh"] | None = None
-    anthropic_effort: Literal["medium"] | None = None
+    anthropic_effort: Literal["low"] | None = None
     max_iter: int = 10
     timeout: int = 1200
     llm_api_key: str | None = None
@@ -103,9 +103,9 @@ class NativeOpenHandsConfig:
         if self.reasoning_effort is not None and (self.model != "gpt-5.6-sol" or self.reasoning_effort != "xhigh"):
             raise ValueError("reasoning_effort is supported only as gpt-5.6-sol/xhigh")
         if self.model == "claude-opus-5":
-            if self.anthropic_effort not in {None, "medium"}:
-                raise ValueError("Claude Opus 5 adaptive effort is fixed to medium")
-            anthropic_effort: Literal["medium"] | None = "medium"
+            if self.anthropic_effort not in {None, "low"}:
+                raise ValueError("Claude Opus 5 adaptive effort is fixed to low")
+            anthropic_effort: Literal["low"] | None = "low"
         else:
             if self.anthropic_effort is not None:
                 raise ValueError("anthropic_effort is supported only for claude-opus-5")
@@ -478,7 +478,7 @@ class _OpenHandsSubprocessProxy:
             child_env["CYBERGYM_REASONING_EFFORT"] = self._reasoning_effort
         if self._model == "claude-opus-5":
             child_env["CYBERGYM_ANTHROPIC_MODEL"] = self._model
-            if self._anthropic_effort != "medium":
+            if self._anthropic_effort != "low":
                 raise RuntimeError("Claude Opus 5 child is missing its fixed adaptive effort")
             child_env["CYBERGYM_ANTHROPIC_EFFORT"] = self._anthropic_effort
         if self._execution_backend == "daytona-private":

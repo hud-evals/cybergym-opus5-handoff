@@ -79,7 +79,7 @@ if [ -n "${CG_MODEL_BASE_URL:-}" ]; then
         --log-dir "$RESULTS_DIR/logs" \
         --tmp-dir "$RESULTS_DIR/tmp" \
         --max-iter 10 \
-        --max-output-tokens 8192 \
+        --max-output-tokens 16000 \
         --timeout 1200 \
         --max-concurrent 1 \
         --runtime-network "$RUNTIME_NETWORK"
@@ -97,7 +97,7 @@ exec "$UV_BIN" run --frozen --no-sync --project "$REPOSITORY_ROOT/integrations/h
     --log-dir "$RESULTS_DIR/logs" \
     --tmp-dir "$RESULTS_DIR/tmp" \
     --max-iter 10 \
-    --max-output-tokens 8192 \
+    --max-output-tokens 16000 \
     --timeout 1200 \
     --max-concurrent 1 \
     --runtime-network "$RUNTIME_NETWORK"

@@ -10,8 +10,8 @@
     "agent_gitlink": "b5cbe061b25e5719d296711706710438f6693079",
     "model": "claude-opus-5",
     "reasoning_effort": null,
-    "adaptive_effort": "medium",
-    "max_output_tokens": 8192
+    "adaptive_effort": "low",
+    "max_output_tokens": 16000
   },
   "runtime": {
     "provider": "daytona",
