@@ -26,6 +26,7 @@ from hud.telemetry import flush as flush_telemetry
 from hud.telemetry.context import get_current_trace_id
 from hud.types import Step
 
+from .artifact_storage import enforce_private_file_mode
 from .contract import OG_PROMPT, openhands_system_prompt, repository_root, validate_contract
 from .openhands_trace import (
     ProjectedStep,
@@ -397,13 +398,14 @@ class _OpenHandsSubprocessProxy:
                     kwargs["env"] = child_env
                     private_log_root = Path(child_env["LOG_DIR"]).parent
                     private_log_root.mkdir(parents=True, exist_ok=True)
+                    private_log_path = private_log_root / "daytona-controller.log"
                     descriptor = os.open(
-                        private_log_root / "daytona-controller.log",
+                        private_log_path,
                         os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
                         0o600,
                     )
                     try:
-                        os.fchmod(descriptor, 0o600)
+                        enforce_private_file_mode(descriptor, private_log_path)
                         with os.fdopen(descriptor, "wb", closefd=False) as output:
                             kwargs["stdout"] = output
                             kwargs["stderr"] = getattr(self._delegate, "STDOUT", -2)
