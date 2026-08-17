@@ -11,7 +11,12 @@ import pytest
 from daytona import DaytonaNotFoundError
 from fastapi.testclient import TestClient
 
-from cybergym_hud.daytona_campaign import _load_task_file, _require_daytona_preflight
+from cybergym_hud.campaign import CampaignBlocked
+from cybergym_hud.daytona_campaign import (
+    _load_task_file,
+    _require_canonical_quiescent,
+    _require_daytona_preflight,
+)
 from cybergym_hud.daytona_lane import (
     RUNTIME_CLASS,
     _register_relay_remote,
@@ -80,6 +85,25 @@ def test_daytona_campaign_inputs_are_private_and_deterministic(tmp_path: Path) -
     )
     report.chmod(0o600)
     _require_daytona_preflight(report)
+
+
+def test_independent_daytona_campaign_requires_canonical_quiescence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    properties = {"ActiveState": "inactive", "MainPID": "0", "UnitFileState": "disabled"}
+    monkeypatch.setattr(
+        "cybergym_hud.daytona_campaign._service_property",
+        lambda name: properties[name],
+    )
+    monkeypatch.setattr(
+        "cybergym_hud.daytona_campaign.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=1, stdout=""),
+    )
+    _require_canonical_quiescent()
+
+    properties["ActiveState"] = "active"
+    with pytest.raises(CampaignBlocked, match="canonical CyberGym campaign"):
+        _require_canonical_quiescent()
 
 
 def test_rewrite_submit_server_is_exact_and_fails_closed(tmp_path: Path) -> None:

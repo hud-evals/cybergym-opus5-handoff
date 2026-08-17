@@ -109,12 +109,7 @@ def _require_canonical_handoff(
     catalog: tuple[str, ...],
     selected: tuple[str, ...],
 ) -> int:
-    if (
-        _service_property("ActiveState") != "inactive"
-        or _service_property("MainPID") != "0"
-        or _service_property("UnitFileState") != "disabled"
-    ):
-        raise CampaignBlocked("canonical CyberGym campaign must be inactive, empty, and disabled")
+    _require_canonical_quiescent()
     first = _read_private(path)
     time.sleep(0.05)
     second = _read_private(path)
@@ -150,6 +145,18 @@ def _require_canonical_handoff(
     remaining = tuple(task_id for task_id in catalog if task_id not in completed_set)
     if selected != remaining:
         raise CampaignBlocked("Daytona selection is not the exact uncompleted canonical suffix")
+    return len(completed)
+
+
+def _require_canonical_quiescent() -> None:
+    """Prove the independent lane cannot overlap the canonical paid runner."""
+
+    if (
+        _service_property("ActiveState") != "inactive"
+        or _service_property("MainPID") != "0"
+        or _service_property("UnitFileState") != "disabled"
+    ):
+        raise CampaignBlocked("canonical CyberGym campaign must be inactive, empty, and disabled")
     docker = subprocess.run(
         ["/usr/bin/docker", "ps", "--filter", "name=openhands-runtime-", "--format", "{{.Names}}"],
         check=True,
@@ -168,7 +175,6 @@ def _require_canonical_handoff(
     )
     if processes.returncode not in {0, 1} or processes.stdout.strip():
         raise CampaignBlocked("canonical OpenHands controller processes remain during Daytona handoff")
-    return len(completed)
 
 
 def _require_daytona_preflight(path: Path) -> None:
@@ -246,13 +252,15 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--confirm-paid-selection", action="store_true")
     parser.add_argument("--continue-after-errors", action="store_true")
+    parser.add_argument("--independent-selection", action="store_true")
+    parser.add_argument("--job-name", default=JOB_NAME)
     parser.add_argument("--repository-root", type=Path, required=True)
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--server", required=True)
     parser.add_argument("--results-dir", type=Path, required=True)
     parser.add_argument("--state-dir", type=Path, required=True)
     parser.add_argument("--task-file", type=Path, required=True)
-    parser.add_argument("--canonical-manifest", type=Path, required=True)
+    parser.add_argument("--canonical-manifest", type=Path)
     parser.add_argument("--artifact-preflight-report", type=Path, required=True)
     parser.add_argument("--artifact-preflight-concurrency", type=int, default=6)
     parser.add_argument("--daytona-preflight-report", type=Path, required=True)
@@ -271,11 +279,17 @@ def main() -> None:
     root = args.repository_root.expanduser().resolve()
     catalog = catalog_task_ids(root)
     selected = _load_task_file(args.task_file.expanduser().resolve(), catalog=catalog)
-    canonical_completed = _require_canonical_handoff(
-        args.canonical_manifest.expanduser().resolve(),
-        catalog=catalog,
-        selected=selected,
-    )
+    if args.independent_selection:
+        _require_canonical_quiescent()
+        canonical_completed = 0
+    else:
+        if args.canonical_manifest is None:
+            raise SystemExit("the canonical handoff requires --canonical-manifest")
+        canonical_completed = _require_canonical_handoff(
+            args.canonical_manifest.expanduser().resolve(),
+            catalog=catalog,
+            selected=selected,
+        )
     validate_daytona_contract()
     _require_daytona_preflight(args.daytona_preflight_report.expanduser().resolve())
     _require_openhands_bridge(root)
@@ -327,7 +341,7 @@ def main() -> None:
                     continue_after_errors=args.continue_after_errors,
                     artifact_fingerprints=fingerprints,
                     selected_task_ids=selected,
-                    job_name=JOB_NAME,
+                    job_name=args.job_name,
                 )
             )
     except CampaignBlocked as exc:
