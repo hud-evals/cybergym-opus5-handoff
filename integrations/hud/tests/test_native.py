@@ -334,6 +334,11 @@ def test_openhands_subprocess_proxy_uses_private_daytona_attachment(
     monkeypatch.setattr("cybergym_hud.daytona_lane.prepared_daytona_runtime", fake_runtime)
     if signed_transport:
         monkeypatch.setenv("CG_DAYTONA_ACTION_TRANSPORT", "signed-preview")
+        openhands_venv = tmp_path / "openhands-venv"
+        (openhands_venv / "bin").mkdir(parents=True)
+        (openhands_venv / "bin/python").write_text("fixture", encoding="utf-8")
+        (openhands_venv / "bin/python").chmod(0o700)
+        monkeypatch.setenv("OPENHANDS_VENV", str(openhands_venv))
     else:
         monkeypatch.delenv("CG_DAYTONA_ACTION_TRANSPORT", raising=False)
     proxy = _OpenHandsSubprocessProxy(
@@ -367,13 +372,20 @@ def test_openhands_subprocess_proxy_uses_private_daytona_attachment(
     )
     assert configured == [True]
     assert calls[0][0][4] == ("cybergym_openhands_launcher" if signed_transport else "openhands.core.main")
-    assert calls[0][2]["env"] == {
+    expected_env = {
         "LLM_API_KEY": "secret",
         "LOG_DIR": str(tmp_path / "private/logs"),
         "PYTHONPATH": str(tmp_path / "shim"),
         "CYBERGYM_REASONING_EFFORT": "xhigh",
         "CYBERGYM_DAYTONA_ACTION_URL": "http://127.0.0.1:43210",
     }
+    observed_env = calls[0][2]["env"]
+    assert {name: observed_env[name] for name in expected_env} == expected_env
+    if signed_transport:
+        assert observed_env["VIRTUAL_ENV"] == str(openhands_venv)
+        assert observed_env["PATH"].startswith(str(openhands_venv / "bin") + ":")
+    else:
+        assert observed_env == expected_env
     assert (workspace / "submit.sh").read_text() == (
         "curl --resolve relay.example:443:203.0.113.10 -X POST https://relay.example/token/submit-vul\n"
     )

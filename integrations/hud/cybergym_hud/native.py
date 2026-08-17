@@ -366,6 +366,17 @@ class _OpenHandsSubprocessProxy:
             command = list(command)
             command[4] = "cybergym_openhands_launcher"
         child_env = dict(kwargs.get("env") or {})
+        if os.environ.get("CG_DAYTONA_ACTION_TRANSPORT") == "signed-preview":
+            openhands_venv = Path(os.environ.get("OPENHANDS_VENV", ""))
+            if (
+                not openhands_venv.is_absolute()
+                or not openhands_venv.is_dir()
+                or not (openhands_venv / "bin/python").is_file()
+                or not os.access(openhands_venv / "bin/python", os.X_OK)
+            ):
+                raise RuntimeError("signed-preview coordinator is missing its pinned OpenHands environment")
+            child_env["VIRTUAL_ENV"] = str(openhands_venv)
+            child_env["PATH"] = f"{openhands_venv / 'bin'}:{os.environ.get('PATH', '')}"
         if self._reasoning_effort or self._runtime_kwargs is not None or self._execution_backend == "daytona-private":
             child_env["PYTHONPATH"] = str(self._shim_dir)
         if self._reasoning_effort:
