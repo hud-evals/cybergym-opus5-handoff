@@ -20,7 +20,7 @@
     "disk_gib": 10,
     "max_concurrent": 60,
     "network": "host_cidr_allowlist_plus_tls_resolve_before_workspace_stage_and_action_server",
-    "action_transport": "private_ssh_local_forward",
+    "action_transport": "private_ssh_local_forward_or_expiring_signed_preview",
     "grader_transport": "task_scoped_https_relay_to_vm101_internal_server",
     "grader_url_in_workspace": "random_expiring_tailscale_funnel_path",
     "daytona_key_in_child_or_workspace": false

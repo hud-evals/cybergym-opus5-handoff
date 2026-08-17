@@ -107,7 +107,7 @@
       "protected_upstream_sources_modified": false,
       "shim_sha256": {
         "openhands_shim/sitecustomize.py": "d7e2fa09d7d7d67731f95d338e91ec346e5eb6067afaebfa0db8bddcd10c6bfd",
-        "openhands_shim/_cybergym_openhands_compat.py": "15f3b85aa8499e421fa2d75dcdb67e6cd6e714eb13c5e67a5bca62ac2d760777"
+        "openhands_shim/_cybergym_openhands_compat.py": "1006f1f1e4dc205fd1d4a218322189ec7566f1f7f06d2a85cee850347b29d3bb"
       }
     },
     "agent_id": "fresh_uuid4_per_rollout",

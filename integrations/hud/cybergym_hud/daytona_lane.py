@@ -422,6 +422,7 @@ def _require_blocked_network(
     *,
     relay_base_url: str,
     relay_hostname: str,
+    relay_port: int,
     relay_ipv4: str,
 ) -> None:
     deadline = time.monotonic() + 60
@@ -439,7 +440,8 @@ def _require_blocked_network(
             timeout=15,
         )
         relay = sandbox.process.exec(
-            f"curl -fsS --max-time 10 --resolve {relay_hostname}:443:{relay_ipv4} {relay_base_url}/healthz >/dev/null",
+            f"curl -fsS --max-time 10 --resolve {relay_hostname}:{relay_port}:{relay_ipv4} "
+            f"{relay_base_url}/healthz >/dev/null",
             timeout=15,
         )
         observed = (web.exit_code, ip.exit_code, relay.exit_code)
@@ -548,10 +550,13 @@ def prepared_daytona_runtime(
     """Create and prove one private Daytona OpenHands runtime, then delete it."""
 
     validate_daytona_contract()
+    action_transport = os.environ.get("CG_DAYTONA_ACTION_TRANSPORT", "ssh-local").strip()
+    if action_transport not in {"ssh-local", "signed-preview"}:
+        raise RuntimeError("CG_DAYTONA_ACTION_TRANSPORT must be ssh-local or signed-preview")
     api_key = os.environ.get("DAYTONA_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("DAYTONA_API_KEY is required for the separate Daytona lane")
-    if not known_hosts.is_file() or stat.S_ISLNK(known_hosts.lstat().st_mode):
+    if action_transport == "ssh-local" and (not known_hosts.is_file() or stat.S_ISLNK(known_hosts.lstat().st_mode)):
         raise RuntimeError("Daytona SSH known-hosts pin is missing or unsafe")
     if not server.startswith("http://"):
         raise ValueError("Daytona lane requires the private HTTP grader identity")
@@ -586,6 +591,7 @@ def prepared_daytona_runtime(
         task_id=task_id,
     )
     tunnel: _SshTunnel | None = None
+    signed_preview: Any | None = None
     release_relay: Callable[[], None] | None = None
     try:
         if relay_admin_token is None:
@@ -605,6 +611,7 @@ def prepared_daytona_runtime(
             sandbox,
             relay_base_url=relay_base_url,
             relay_hostname=relay_hostname,
+            relay_port=relay_port,
             relay_ipv4=relay_ipv4,
         )
         submission_url = f"{relay_base_url}/{relay_token}"
@@ -621,15 +628,22 @@ def prepared_daytona_runtime(
             "openhands-action-server",
             SessionExecuteRequest(command=_action_server_command(), run_async=True),
         )
-        ssh = sandbox.create_ssh_access(expires_in_minutes=120)
-        tunnel = _SshTunnel(
-            username=ssh.token,
-            known_hosts=known_hosts,
-        )
-        tunnel.start()
-        if tunnel.action_local_port is None:
-            raise RuntimeError("Daytona SSH tunnel omitted its action port")
-        action_url = f"http://127.0.0.1:{tunnel.action_local_port}"
+        if action_transport == "ssh-local":
+            ssh = sandbox.create_ssh_access(expires_in_minutes=120)
+            tunnel = _SshTunnel(
+                username=ssh.token,
+                known_hosts=known_hosts,
+            )
+            tunnel.start()
+            if tunnel.action_local_port is None:
+                raise RuntimeError("Daytona SSH tunnel omitted its action port")
+            action_url = f"http://127.0.0.1:{tunnel.action_local_port}"
+        else:
+            signed_preview = sandbox.create_signed_preview_url(
+                ACTION_PORT,
+                expires_in_seconds=2 * 60 * 60,
+            )
+            action_url = str(signed_preview.url)
         _wait_action_server(action_url)
         yield DaytonaPreparedRuntime(
             action_url=action_url,
@@ -644,6 +658,11 @@ def prepared_daytona_runtime(
                 tunnel.close()
             except BaseException as exc:
                 tunnel_error = exc
+        if signed_preview is not None:
+            try:
+                sandbox.expire_signed_preview_url(ACTION_PORT, str(signed_preview.token))
+            except BaseException as exc:
+                tunnel_error = exc
         try:
             _delete_exact(daytona, sandbox)
         finally:
@@ -656,7 +675,7 @@ def prepared_daytona_runtime(
         if release_relay is not None:
             release_relay()
         if tunnel_error is not None:
-            raise RuntimeError("Daytona SSH tunnel cleanup failed") from tunnel_error
+            raise RuntimeError("Daytona action transport cleanup failed") from tunnel_error
 
 
 def configure_attached_runtime(config_path: Path) -> Path:

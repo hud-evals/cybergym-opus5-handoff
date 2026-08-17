@@ -9,7 +9,9 @@ available in the OpenHands controller process or model workspace.
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Callable
+from urllib.parse import urlsplit
 
 import tenacity
 from openhands.core.config import AppConfig
@@ -20,6 +22,29 @@ from openhands.runtime.impl.action_execution.action_execution_client import (
 from openhands.runtime.plugins.requirement import PluginRequirement
 from openhands.utils.async_utils import call_sync_from_async
 from openhands.utils.tenacity_stop import stop_if_should_exit
+
+LOOPBACK_ACTION_URL = re.compile(r"^http://127\.0\.0\.1:([1-9][0-9]{0,4})$")
+SIGNED_ACTION_HOST = re.compile(r"^4444-[a-z0-9]+\.daytonaproxy[0-9]+\.net$")
+
+
+def validated_action_url(value: str) -> str:
+    loopback = LOOPBACK_ACTION_URL.fullmatch(value)
+    if loopback is not None and int(loopback.group(1)) <= 65535:
+        return value
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme == "https"
+        and parsed.hostname is not None
+        and SIGNED_ACTION_HOST.fullmatch(parsed.hostname)
+        and parsed.port is None
+        and parsed.username is None
+        and parsed.password is None
+        and parsed.path in {"", "/"}
+        and not parsed.query
+        and not parsed.fragment
+    ):
+        return value.rstrip("/")
+    raise RuntimeError("CyberGym Daytona action URL is not an exact private transport origin")
 
 
 class CyberGymDaytonaAttachedRuntime(ActionExecutionClient):
@@ -38,9 +63,7 @@ class CyberGymDaytonaAttachedRuntime(ActionExecutionClient):
         **kwargs: object,
     ) -> None:
         action_url = os.environ.get("CYBERGYM_DAYTONA_ACTION_URL", "").strip()
-        if not action_url.startswith("http://127.0.0.1:"):
-            raise RuntimeError("CyberGym Daytona action URL is missing or not loopback-only")
-        self.api_url = action_url.rstrip("/")
+        self.api_url = validated_action_url(action_url)
         config.workspace_mount_path_in_sandbox = "/workspace"
         super().__init__(
             config,

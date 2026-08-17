@@ -924,6 +924,34 @@ def test_site_install_accepts_attached_daytona_without_docker_patch(
     assert patched == ["sync", "async"]
 
 
+def test_site_install_accepts_signed_daytona_preview_without_docker_patch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compat = _load()
+    llm = SimpleNamespace(
+        FUNCTION_CALLING_SUPPORTED_MODELS=[],
+        REASONING_EFFORT_SUPPORTED_MODELS=[],
+        MODELS_WITHOUT_STOP_WORDS=[],
+    )
+    async_llm = SimpleNamespace()
+    package = ModuleType("openhands.llm")
+    package.llm = llm
+    package.async_llm = async_llm
+    monkeypatch.setitem(sys.modules, "openhands.llm", package)
+    monkeypatch.setenv("CYBERGYM_REASONING_EFFORT", "xhigh")
+    monkeypatch.delenv("CYBERGYM_RUNTIME_NETWORK", raising=False)
+    monkeypatch.setenv(
+        "CYBERGYM_DAYTONA_ACTION_URL",
+        "https://4444-pwynj1agji7p4stl.daytonaproxy01.net",
+    )
+    patched = []
+    monkeypatch.setattr(compat, "_patch_llm_instances", lambda *_args: patched.append("sync"))
+    monkeypatch.setattr(compat, "_patch_async_llm_instances", lambda *_args: patched.append("async"))
+
+    assert compat.install() is True
+    assert patched == ["sync", "async"]
+
+
 @pytest.mark.parametrize(
     "action_url",
     [
@@ -932,6 +960,9 @@ def test_site_install_accepts_attached_daytona_without_docker_patch(
         "http://127.0.0.1:43210.example",
         "http://localhost:43210",
         "http://127.0.0.1:65536",
+        "https://4444-token.daytonaproxy01.net.evil.example",
+        "https://4444-token.daytonaproxy01.net/path",
+        "https://4444-token.daytonaproxy01.net?token=unexpected",
     ],
 )
 def test_site_install_rejects_nonexact_daytona_action_url(

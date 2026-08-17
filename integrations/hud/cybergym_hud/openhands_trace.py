@@ -738,7 +738,15 @@ def runtime_secret_values(environ: Mapping[str, str] | None = None) -> tuple[str
     """Select exact secret values without ever retaining or exporting their names."""
 
     source = os.environ if environ is None else environ
-    return tuple(value for name, value in source.items() if value and _RUNTIME_SECRET_NAME.search(name))
+    return tuple(
+        value
+        for name, value in source.items()
+        if value
+        and (
+            _RUNTIME_SECRET_NAME.search(name)
+            or (name == "CYBERGYM_DAYTONA_ACTION_URL" and value.startswith("https://"))
+        )
+    )
 
 
 def _read_regular_json(path: Path, *, label: str) -> object:

@@ -20,11 +20,18 @@ from cybergym_hud.openhands_trace import (
     TraceImportError,
     import_openhands_trace,
     map_openhands_receipt,
+    runtime_secret_values,
     validate_remote_trace_projection,
 )
 from cybergym_hud.receipt import NativeReceipt, NativeRunProfile
 from cybergym_hud.trace_backfill import StepRedactor, build_backfill_plan
 from cybergym_hud.trace_tail import OpenHandsEventTailer
+
+
+def test_signed_daytona_action_url_is_treated_as_a_runtime_secret() -> None:
+    signed = "https://4444-secret.daytonaproxy01.net"
+    assert runtime_secret_values({"CYBERGYM_DAYTONA_ACTION_URL": signed}) == (signed,)
+    assert runtime_secret_values({"CYBERGYM_DAYTONA_ACTION_URL": "http://127.0.0.1:43210"}) == ()
 
 
 def _response(response_id: str, calls: list[tuple[str, str, dict]], *, reasoning: str | None = None) -> dict:
