@@ -975,7 +975,9 @@ async def _run_and_record(
                         raise RuntimeError(f"live and saved OpenHands projections disagree on {digest_name}")
             import_metadata = live_metadata
         except Exception as exc:
-            diagnostic = f"{type(exc).__name__}: OpenHands trajectory import failed; inspect private rollout logs"
+            diagnostic = (
+                f"{type(exc).__name__}: OpenHands trajectory import failed: {exc}; inspect private rollout logs"
+            )
             import_metadata = {
                 "schema_version": "1",
                 "status": "error",
