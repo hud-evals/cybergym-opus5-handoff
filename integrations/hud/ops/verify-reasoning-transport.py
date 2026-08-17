@@ -15,6 +15,7 @@ from typing import Any
 
 MODEL = "gpt-5.6-sol"
 EFFORT = "xhigh"
+RUNTIME_NETWORK = "cybergym-no-internet"
 
 
 def _response(response_id: str, output: list[dict[str, Any]]) -> bytes:
@@ -189,6 +190,7 @@ def prove(repository_root: Path) -> dict[str, Any]:
             "PATH": os.environ.get("PATH", ""),
             "PYTHONPATH": str(shim_dir),
             "CYBERGYM_REASONING_EFFORT": EFFORT,
+            "CYBERGYM_RUNTIME_NETWORK": RUNTIME_NETWORK,
             "CYBERGYM_LOCAL_PROOF_BASE_URL": f"http://127.0.0.1:{server.server_port}/v1",
         }
         try:

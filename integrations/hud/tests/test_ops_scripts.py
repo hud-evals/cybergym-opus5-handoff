@@ -67,6 +67,12 @@ def test_preflight_contains_no_native_model_runner() -> None:
     assert "CG_REASONING_EFFORT=xhigh" in text
 
 
+def test_reasoning_transport_proof_activates_the_private_runtime_patch() -> None:
+    text = (OPS / "verify-reasoning-transport.py").read_text(encoding="utf-8")
+    assert 'RUNTIME_NETWORK = "cybergym-no-internet"' in text
+    assert '"CYBERGYM_RUNTIME_NETWORK": RUNTIME_NETWORK' in text
+
+
 def test_runtime_recovery_uses_exact_official_artifact_and_preserves_upstream_tag(tmp_path: Path) -> None:
     setup = (OPS / "setup.sh").read_text(encoding="utf-8")
     helper = (OPS / "runtime-image.sh").read_text(encoding="utf-8")
