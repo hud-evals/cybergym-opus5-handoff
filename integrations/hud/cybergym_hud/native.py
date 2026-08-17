@@ -189,17 +189,23 @@ def load_upstream_openhands(root: Path) -> ModuleType:
 
 
 _STUCK_IN_LOOP_REASON = "AgentStuckInLoopError: Agent got stuck in a loop"
+_MAX_OUTPUT_TOKENS_EXHAUSTED_REASON = (
+    "RuntimeError: There was an unexpected error while running the agent: "
+    "CyberGymMaxOutputTokensExhaustedError. You can refresh the page or ask the agent to try again."
+)
 
 
 def _classify_error_reasons(
     reasons: list[str],
     *,
     max_iter: int,
-) -> Literal["none", "max_iterations", "stuck_loop", "error"]:
+) -> Literal["none", "max_iterations", "stuck_loop", "max_output_tokens_exhausted", "error"]:
     if not reasons:
         return "none"
     if all(reason == _STUCK_IN_LOOP_REASON for reason in reasons):
         return "stuck_loop"
+    if all(reason == _MAX_OUTPUT_TOKENS_EXHAUSTED_REASON for reason in reasons):
+        return "max_output_tokens_exhausted"
     for reason in reasons:
         match = _MAX_ITERATION_REASON.fullmatch(reason)
         if match is None:
@@ -218,7 +224,7 @@ def _controller_termination(
     receipt_log_dir: Path,
     *,
     max_iter: int,
-) -> Literal["finished", "rejected", "max_iterations", "stuck_loop", "error"]:
+) -> Literal["finished", "rejected", "max_iterations", "stuck_loop", "max_output_tokens_exhausted", "error"]:
     """Classify pinned OpenHands' zero-exit controller terminal state.
 
     OpenHands 0.33 represents normal headless iteration exhaustion as
@@ -284,7 +290,8 @@ def _controller_termination(
     if error_reasons:
         # An ERROR is terminal in this headless runner. Any mixture with a
         # different terminal state is malformed. Only the exact configured
-        # iteration limit and pinned model-loop detector are gradeable; all
+        # iteration limit, pinned model-loop detector, and the integration's
+        # exact post-retry Responses exhaustion sentinel are gradeable; all
         # other reasons remain provider/transport/controller infrastructure
         # failures.
         if len(error_reasons) != len(terminal_states):

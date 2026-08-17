@@ -379,8 +379,9 @@ def test_bridge_fails_closed_on_model_effort_and_call_id_drift() -> None:
         ]
     )
     max_output = compat._ResponsesBridge("xhigh", client_factory=lambda **_kwargs: FakeClient(max_output_api))
-    with pytest.raises(FakeLLMNoResponseError, match="max_output_tokens"):
+    with pytest.raises(FakeLLMNoResponseError, match="max_output_tokens") as exhausted:
         max_output(model="gpt-5.6-sol", messages=[])
+    assert type(exhausted.value).__name__ == "CyberGymMaxOutputTokensExhaustedError"
 
     filtered_api = FakeResponses(
         [

@@ -505,6 +505,25 @@ def test_exact_stuck_in_loop_controller_state_is_canonical_completion(config: Na
     assert _controller_termination(Path(receipt.log_dir), max_iter=17) == "stuck_loop"
 
 
+def test_exact_responses_exhaustion_controller_state_is_canonical_completion(
+    config: NativeOpenHandsConfig,
+) -> None:
+    reason = (
+        "RuntimeError: There was an unexpected error while running the agent: "
+        "CyberGymMaxOutputTokensExhaustedError. You can refresh the page or ask the agent to try again."
+    )
+    receipt = execute_upstream_openhands(
+        config,
+        NativeTaskBinding(task_id="arvo:10013", server=config.server),
+        module=StructuredControllerUpstream([("error", reason)]),
+        uuid_factory=lambda: UUID(int=13),
+    )
+
+    assert receipt.status == "completed"
+    assert receipt.error is None
+    assert receipt.controller_termination == "max_output_tokens_exhausted"
+
+
 @pytest.mark.parametrize(
     "states",
     [
@@ -542,6 +561,13 @@ def test_exact_stuck_in_loop_controller_state_is_canonical_completion(config: Na
             ("error", "private provider diagnostic"),
         ],
         [("error", "AgentStuckInLoopError: Agent got stuck in a loop ")],
+        [
+            (
+                "error",
+                "RuntimeError: There was an unexpected error while running the agent: "
+                "LLMNoResponseError. You can refresh the page or ask the agent to try again.",
+            )
+        ],
     ],
 )
 def test_mismatched_or_mixed_controller_errors_remain_infra(

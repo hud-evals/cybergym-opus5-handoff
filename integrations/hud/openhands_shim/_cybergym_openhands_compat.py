@@ -31,12 +31,27 @@ STANDARD_INPUT_USD_PER_TOKEN = 5.0 / 1_000_000
 STANDARD_CACHED_INPUT_USD_PER_TOKEN = 0.5 / 1_000_000
 STANDARD_OUTPUT_USD_PER_TOKEN = 30.0 / 1_000_000
 LONG_CONTEXT_INPUT_THRESHOLD = 272_000
+_MAX_OUTPUT_ERROR_TYPE: type[Exception] | None = None
 
 
 def _field(value: Any, name: str, default: Any = None) -> Any:
     if isinstance(value, Mapping):
         return value.get(name, default)
     return getattr(value, name, default)
+
+
+def _max_output_tokens_exhausted_error(message: str) -> Exception:
+    """Return a retryable error whose exact type survives controller wrapping."""
+
+    global _MAX_OUTPUT_ERROR_TYPE
+    if _MAX_OUTPUT_ERROR_TYPE is None:
+        from openhands.core.exceptions import LLMNoResponseError
+
+        class CyberGymMaxOutputTokensExhaustedError(LLMNoResponseError):
+            """All pinned retries exhausted on Responses max_output_tokens."""
+
+        _MAX_OUTPUT_ERROR_TYPE = CyberGymMaxOutputTokensExhaustedError
+    return _MAX_OUTPUT_ERROR_TYPE(message)
 
 
 def _text_content(content: Any) -> str:
@@ -241,9 +256,7 @@ def _response_to_model_response(response: Any, requested_model: str) -> tuple[An
             # OpenHands already applies its pinned, bounded LLM retry policy to
             # LLMNoResponseError.  Do not adapt partial output: it can contain
             # truncated tool arguments and is not a canonical CodeAct turn.
-            from openhands.core.exceptions import LLMNoResponseError
-
-            raise LLMNoResponseError(
+            raise _max_output_tokens_exhausted_error(
                 "OpenAI Responses exhausted max_output_tokens before producing a complete CodeAct turn"
             )
         raise RuntimeError(

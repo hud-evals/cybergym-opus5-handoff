@@ -209,7 +209,7 @@ def validate_contract(
         "shim_sha256": {
             "openhands_shim/sitecustomize.py": "d7e2fa09d7d7d67731f95d338e91ec346e5eb6067afaebfa0db8bddcd10c6bfd",
             "openhands_shim/_cybergym_openhands_compat.py": (
-                "7d4d16836ddabab738086e24231a6edd6bebdb391487b909aed7f87e142b6122"
+                "5686794c2719f188ad4622c94ac5af8734586fd63af24a69780aa58a360470d8"
             ),
         },
     }:
@@ -223,10 +223,12 @@ def validate_contract(
             "rejected",
             "configured_max_iteration_sentinel",
             "pinned_stuck_in_loop_sentinel",
+            "pinned_responses_max_output_exhaustion_sentinel",
         ],
         "raw_logs_authorize_completion": False,
         "configured_max_iteration_sentinel": "completed_and_graded_like_upstream",
         "pinned_stuck_in_loop_sentinel": "completed_and_graded_like_upstream",
+        "pinned_responses_max_output_exhaustion_sentinel": "completed_and_graded_like_upstream",
         "all_other_terminal_states": "non_reportable_infrastructure_error",
         "all_other_controller_errors": "non_reportable_infrastructure_error",
         "monetary_budget_configured": False,
