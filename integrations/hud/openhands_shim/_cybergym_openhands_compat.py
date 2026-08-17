@@ -26,6 +26,8 @@ RUNTIME_NETWORK_ENV = "CYBERGYM_RUNTIME_NETWORK"
 DAYTONA_ACTION_URL_ENV = "CYBERGYM_DAYTONA_ACTION_URL"
 ANTHROPIC_MODEL_ENV = "CYBERGYM_ANTHROPIC_MODEL"
 ANTHROPIC_TARGET_MODEL = "claude-opus-5"
+ANTHROPIC_EFFORT_ENV = "CYBERGYM_ANTHROPIC_EFFORT"
+ANTHROPIC_SUPPORTED_EFFORT = "medium"
 SUPPORTED_EFFORT = "xhigh"
 SUPPORTED_RUNTIME_NETWORK = "cybergym-no-internet"
 SUPPORTED_RUNTIME_SUBNET = ipaddress.ip_network("172.30.0.0/24")
@@ -716,6 +718,29 @@ def _patch_claude_llm_instances(llm: Any) -> None:
     cls.__init__ = patched_init
 
 
+def _patch_claude_anthropic_requests(transformation: Any, effort: str) -> None:
+    """Inject Opus 5 adaptive effort into the final Anthropic request body."""
+
+    cls = transformation.AnthropicConfig
+    original = cls.transform_request
+    if getattr(original, "_cybergym_claude_opus5", False):
+        return
+
+    @functools.wraps(original)
+    def patched(
+        self: Any, model: str, messages: Any, optional_params: dict, litellm_params: dict, headers: dict
+    ) -> dict:
+        data = original(self, model, messages, optional_params, litellm_params, headers)
+        if model != ANTHROPIC_TARGET_MODEL:
+            return data
+        if "temperature" in data or "top_p" in data or "output_config" in data:
+            raise RuntimeError("Claude Opus 5 final request parameters drifted")
+        return {**data, "output_config": {"effort": effort}}
+
+    patched._cybergym_claude_opus5 = True
+    cls.transform_request = patched
+
+
 def _patch_docker_runtime(docker_runtime: Any, network: str) -> None:
     """Connect the host controller directly to its internal-only container.
 
@@ -766,6 +791,7 @@ def install() -> bool:
     runtime_network = os.environ.get(RUNTIME_NETWORK_ENV)
     daytona_action_url = os.environ.get(DAYTONA_ACTION_URL_ENV)
     anthropic_model = os.environ.get(ANTHROPIC_MODEL_ENV)
+    anthropic_effort = os.environ.get(ANTHROPIC_EFFORT_ENV)
     if effort is None and runtime_network is None and daytona_action_url is None and anthropic_model is None:
         return False
     if runtime_network is not None and daytona_action_url is not None:
@@ -788,9 +814,15 @@ def install() -> bool:
     if anthropic_model is not None:
         if anthropic_model != ANTHROPIC_TARGET_MODEL:
             raise RuntimeError(f"{ANTHROPIC_MODEL_ENV} must be {ANTHROPIC_TARGET_MODEL!r}; got {anthropic_model!r}")
+        if anthropic_effort != ANTHROPIC_SUPPORTED_EFFORT:
+            raise RuntimeError(
+                f"{ANTHROPIC_EFFORT_ENV} must be {ANTHROPIC_SUPPORTED_EFFORT!r}; got {anthropic_effort!r}"
+            )
+        from litellm.llms.anthropic.chat import transformation
         from openhands.llm import llm
 
         _patch_claude_llm_instances(llm)
+        _patch_claude_anthropic_requests(transformation, anthropic_effort)
     if effort is None:
         return True
     if effort != SUPPORTED_EFFORT:

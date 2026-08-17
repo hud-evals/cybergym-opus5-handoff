@@ -216,10 +216,13 @@ def test_claude_opus_5_direct_profile_is_receipted(config: NativeOpenHandsConfig
     profile = configured.receipt_profile()
     assert profile.model == "claude-opus-5"
     assert profile.reasoning_effort is None
+    assert profile.anthropic_effort == "medium"
     assert profile.reasoning_transport == "none"
     assert profile.response_storage == "none"
     assert profile.response_continuation == "none"
     assert profile.omitted_sampling_parameters == ("temperature", "top_p")
+    with pytest.raises(ValueError, match="only for claude-opus-5"):
+        replace(config, anthropic_effort="medium").normalized()
 
 
 def test_runtime_limits_are_coherent_and_receipted(config: NativeOpenHandsConfig) -> None:
@@ -286,6 +289,7 @@ def test_openhands_subprocess_proxy_injects_only_the_exact_child(tmp_path: Path)
         shim_dir=tmp_path / "shim",
         model="gpt-5.6-sol",
         reasoning_effort="xhigh",
+        anthropic_effort=None,
         runtime_kwargs=runtime_kwargs,
     )
     config_path = tmp_path / "config.toml"
@@ -331,6 +335,7 @@ def test_subprocess_proxy_omits_only_deprecated_claude_temperature(tmp_path: Pat
         shim_dir=tmp_path / "shim",
         model="claude-opus-5",
         reasoning_effort=None,
+        anthropic_effort="medium",
         runtime_kwargs={
             "auto_remove": True,
             "network": "cybergym-no-internet",
@@ -362,6 +367,7 @@ def test_subprocess_proxy_omits_only_deprecated_claude_temperature(tmp_path: Pat
     assert "top_p" not in rendered
     assert "CYBERGYM_REASONING_EFFORT" not in calls[0][2]["env"]
     assert calls[0][2]["env"]["CYBERGYM_ANTHROPIC_MODEL"] == "claude-opus-5"
+    assert calls[0][2]["env"]["CYBERGYM_ANTHROPIC_EFFORT"] == "medium"
 
 
 @pytest.mark.parametrize("signed_transport", [False, True])
@@ -426,6 +432,7 @@ def test_openhands_subprocess_proxy_uses_private_daytona_attachment(
         shim_dir=tmp_path / "shim",
         model="gpt-5.6-sol",
         reasoning_effort="xhigh",
+        anthropic_effort=None,
         execution_backend="daytona-private",
         task_id="arvo:10013",
         server="http://172.30.0.1:8666",

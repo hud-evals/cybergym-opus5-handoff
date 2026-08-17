@@ -123,6 +123,7 @@ def validate_campaign_profile(config: NativeOpenHandsConfig, *, max_concurrent: 
     expected = {
         "model": CAMPAIGN_MODEL,
         "reasoning_effort": CAMPAIGN_REASONING_EFFORT,
+        "anthropic_effort": "medium",
         "max_iter": CAMPAIGN_MAX_ITER,
         "timeout": CAMPAIGN_TIMEOUT_SECONDS,
         "top_p": 1.0,

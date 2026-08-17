@@ -59,6 +59,7 @@ class NativeOpenHandsConfig:
     log_dir: Path
     tmp_dir: Path
     reasoning_effort: Literal["xhigh"] | None = None
+    anthropic_effort: Literal["medium"] | None = None
     max_iter: int = 10
     timeout: int = 1200
     llm_api_key: str | None = None
@@ -101,6 +102,14 @@ class NativeOpenHandsConfig:
             raise ValueError("grader_server_mode must be images or binary")
         if self.reasoning_effort is not None and (self.model != "gpt-5.6-sol" or self.reasoning_effort != "xhigh"):
             raise ValueError("reasoning_effort is supported only as gpt-5.6-sol/xhigh")
+        if self.model == "claude-opus-5":
+            if self.anthropic_effort not in {None, "medium"}:
+                raise ValueError("Claude Opus 5 adaptive effort is fixed to medium")
+            anthropic_effort: Literal["medium"] | None = "medium"
+        else:
+            if self.anthropic_effort is not None:
+                raise ValueError("anthropic_effort is supported only for claude-opus-5")
+            anthropic_effort = None
         runtime_limits = (
             self.runtime_nano_cpus,
             self.runtime_memory_bytes,
@@ -129,6 +138,7 @@ class NativeOpenHandsConfig:
             server=normalize_server(self.server),
             model=self.model,
             reasoning_effort=self.reasoning_effort,
+            anthropic_effort=anthropic_effort,
             log_dir=self.log_dir.expanduser().resolve(),
             tmp_dir=self.tmp_dir.expanduser().resolve(),
             max_iter=self.max_iter,
@@ -170,6 +180,7 @@ class NativeOpenHandsConfig:
             budget_profile=budget_profile,
             model=self.model,
             reasoning_effort=self.reasoning_effort,
+            anthropic_effort=self.anthropic_effort,
             reasoning_transport=("gpt56_openai_responses_bridge" if self.reasoning_effort else "none"),
             response_storage=("openai_store_true" if self.reasoning_effort else "none"),
             response_continuation=(
@@ -412,6 +423,7 @@ class _OpenHandsSubprocessProxy:
         shim_dir: Path,
         model: str,
         reasoning_effort: str | None,
+        anthropic_effort: str | None,
         runtime_kwargs: dict[str, Any] | None = None,
         execution_backend: Literal["native-docker", "daytona-private"] = "native-docker",
         task_id: str | None = None,
@@ -423,6 +435,7 @@ class _OpenHandsSubprocessProxy:
         self._shim_dir = shim_dir
         self._model = model
         self._reasoning_effort = reasoning_effort
+        self._anthropic_effort = anthropic_effort
         self._runtime_kwargs = runtime_kwargs
         self._execution_backend = execution_backend
         self._task_id = task_id
@@ -465,6 +478,9 @@ class _OpenHandsSubprocessProxy:
             child_env["CYBERGYM_REASONING_EFFORT"] = self._reasoning_effort
         if self._model == "claude-opus-5":
             child_env["CYBERGYM_ANTHROPIC_MODEL"] = self._model
+            if self._anthropic_effort != "medium":
+                raise RuntimeError("Claude Opus 5 child is missing its fixed adaptive effort")
+            child_env["CYBERGYM_ANTHROPIC_EFFORT"] = self._anthropic_effort
         if self._execution_backend == "daytona-private":
             if (
                 self._task_id is None
@@ -680,6 +696,7 @@ def execute_upstream_openhands(
             shim_dir=shim_dir,
             model=config.model,
             reasoning_effort=config.reasoning_effort,
+            anthropic_effort=config.anthropic_effort,
             runtime_kwargs=runtime_kwargs,
             execution_backend=config.execution_backend,
             task_id=binding.task_id,

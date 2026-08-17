@@ -68,6 +68,7 @@ def test_packaged_contract_and_checkout_are_pinned() -> None:
     assert CONTRACT["runtime"]["paid_campaign"]["max_output_tokens"] == 8192
     assert CONTRACT["runtime"]["paid_campaign"]["model"] == "claude-opus-5"
     assert CONTRACT["runtime"]["paid_campaign"]["reasoning_effort"] is None
+    assert CONTRACT["runtime"]["paid_campaign"]["adaptive_effort"] == "medium"
     assert CONTRACT["runtime"]["resume"] is True
     assert CONTRACT["runtime"]["retries"] == "terminal_error_rows_only_after_terminal_remote_receipt"
     assert CONTRACT["runtime"]["paid_campaign"]["source_selected_manifest_sha256"] == (

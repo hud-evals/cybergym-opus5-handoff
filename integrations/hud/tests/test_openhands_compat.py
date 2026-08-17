@@ -1036,13 +1036,32 @@ def test_claude_opus5_patch_omits_deprecated_temperature(
                 top_p=1.0,
             )
 
+    class AnthropicConfig:
+        def transform_request(self, model, _messages, optional_params, _litellm_params, _headers):
+            return {"model": model, **optional_params}
+
     llm_module = ModuleType("openhands.llm.llm")
     llm_module.LLM = LLM
     package = ModuleType("openhands.llm")
     package.llm = llm_module
     openhands = ModuleType("openhands")
     openhands.llm = package
+    transformation = ModuleType("litellm.llms.anthropic.chat.transformation")
+    transformation.AnthropicConfig = AnthropicConfig
+    chat = ModuleType("litellm.llms.anthropic.chat")
+    chat.transformation = transformation
+    anthropic = ModuleType("litellm.llms.anthropic")
+    anthropic.chat = chat
+    llms = ModuleType("litellm.llms")
+    llms.anthropic = anthropic
+    litellm = ModuleType("litellm")
+    litellm.llms = llms
     for name, value in {
+        "litellm": litellm,
+        "litellm.llms": llms,
+        "litellm.llms.anthropic": anthropic,
+        "litellm.llms.anthropic.chat": chat,
+        "litellm.llms.anthropic.chat.transformation": transformation,
         "openhands": openhands,
         "openhands.llm": package,
         "openhands.llm.llm": llm_module,
@@ -1052,6 +1071,7 @@ def test_claude_opus5_patch_omits_deprecated_temperature(
     monkeypatch.delenv("CYBERGYM_RUNTIME_NETWORK", raising=False)
     monkeypatch.setenv("CYBERGYM_DAYTONA_ACTION_URL", "http://127.0.0.1:43210")
     monkeypatch.setenv("CYBERGYM_ANTHROPIC_MODEL", "claude-opus-5")
+    monkeypatch.setenv("CYBERGYM_ANTHROPIC_EFFORT", "medium")
 
     assert compat.install() is True
     target = LLM()
@@ -1061,6 +1081,12 @@ def test_claude_opus5_patch_omits_deprecated_temperature(
     }
     non_target = LLM("claude-sonnet-5")
     assert non_target._completion_unwrapped.keywords["temperature"] == 0.0
+    config = AnthropicConfig()
+    assert config.transform_request("claude-opus-5", [], {}, {}, {}) == {
+        "model": "claude-opus-5",
+        "output_config": {"effort": "medium"},
+    }
+    assert config.transform_request("claude-sonnet-5", [], {}, {}, {}) == {"model": "claude-sonnet-5"}
 
 
 def test_private_runtime_patch_activates_without_reasoning(
