@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import os
 import secrets
@@ -46,7 +47,7 @@ def validate_daytona_contract() -> dict[str, Any]:
         or payload.get("job_name") != "cybergym-gpt5.6-sol-2"
         or payload.get("runtime", {}).get("image") != DAYTONA_IMAGE
         or payload.get("runtime", {}).get("network")
-        != "domain_allowlist_task_relay_only_after_action_server_and_ssh_tunnel"
+        != "host_cidr_plus_domain_allowlist_task_relay_only_after_action_server_and_ssh_tunnel"
     ):
         raise RuntimeError("CyberGym Daytona fidelity contract drifted")
     return payload
@@ -169,7 +170,7 @@ class DaytonaPreparedRuntime:
     sandbox_id: str
 
 
-def _relay_settings() -> tuple[str, str, Path]:
+def _relay_settings() -> tuple[str, str, str, Path]:
     from urllib.parse import urlsplit
 
     base_url = os.environ.get("CG_DAYTONA_RELAY_URL", "").strip().rstrip("/")
@@ -179,7 +180,20 @@ def _relay_settings() -> tuple[str, str, Path]:
     registry_raw = os.environ.get("CG_DAYTONA_RELAY_REGISTRY", "").strip()
     if not registry_raw:
         raise ValueError("CG_DAYTONA_RELAY_REGISTRY is required")
-    return base_url, parsed.hostname, Path(registry_raw).expanduser().resolve()
+    cidrs_raw = os.environ.get("CG_DAYTONA_RELAY_CIDRS", "").strip()
+    cidrs = [value.strip() for value in cidrs_raw.split(",") if value.strip()]
+    if not cidrs:
+        raise ValueError("CG_DAYTONA_RELAY_CIDRS is required")
+    for value in cidrs:
+        network = ipaddress.ip_network(value, strict=True)
+        if network.is_private or network.is_loopback or network.num_addresses != 1:
+            raise ValueError("relay allowlist must contain only public /32 or /128 hosts")
+    return (
+        base_url,
+        parsed.hostname,
+        ",".join(cidrs),
+        Path(registry_raw).expanduser().resolve(),
+    )
 
 
 def _register_relay(registry: Path, *, task_id: str) -> tuple[str, Path]:
@@ -301,7 +315,7 @@ def prepared_daytona_runtime(
         raise RuntimeError("Daytona SSH known-hosts pin is missing or unsafe")
     if not server.startswith("http://"):
         raise ValueError("Daytona lane requires the private HTTP grader identity")
-    relay_base_url, relay_hostname, relay_registry = _relay_settings()
+    relay_base_url, relay_hostname, relay_cidrs, relay_registry = _relay_settings()
     daytona = Daytona()
     sandbox = daytona.create(
         CreateSandboxFromImageParams(
@@ -343,7 +357,7 @@ def prepared_daytona_runtime(
         action_url = f"http://127.0.0.1:{tunnel.action_local_port}"
         _wait_action_server(action_url)
         sandbox.update_network_settings(
-            network_block_all=False,
+            network_allow_list=relay_cidrs,
             domain_allow_list=relay_hostname,
         )
         _require_blocked_network(sandbox, relay_base_url=relay_base_url)

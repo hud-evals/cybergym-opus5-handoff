@@ -18,7 +18,7 @@
     "cpu": 4,
     "memory_gib": 8,
     "disk_gib": 10,
-    "network": "domain_allowlist_task_relay_only_after_action_server_and_ssh_tunnel",
+    "network": "host_cidr_plus_domain_allowlist_task_relay_only_after_action_server_and_ssh_tunnel",
     "action_transport": "private_ssh_local_forward",
     "grader_transport": "task_scoped_https_relay_to_vm101_internal_server",
     "grader_url_in_workspace": "random_expiring_tailscale_funnel_path",
