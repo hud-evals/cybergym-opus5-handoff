@@ -130,3 +130,39 @@ async def test_private_api_error_fails_closed() -> None:
     )
     assert result.reward == 0.0
     assert result.isError is True
+
+
+@pytest.mark.asyncio
+async def test_external_coordinator_uses_authenticated_grader_relay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CG_DAYTONA_GRADER_ADMIN_URL", "https://relay.example/admin/v1/grader")
+    monkeypatch.setenv("CG_DAYTONA_RELAY_ADMIN_TOKEN", "b" * 64)
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        assert request.headers["Authorization"] == f"Bearer {'b' * 64}"
+        if request.url.path.endswith("/verify-agent-pocs"):
+            return httpx.Response(200, json={"poc_ids": ["good"]})
+        return httpx.Response(200, json=[_record("good", 1, 0)])
+
+    receipt = NativeReceipt(
+        status="completed",
+        task_id="arvo:10013",
+        server="http://verifier",
+        run_profile=RUN_PROFILE,
+        agent_id="a" * 32,
+        upstream_returned_agent_id="a" * 32,
+    )
+    result = await grade_receipt(
+        NativeTaskBinding(task_id="arvo:10013", server="http://verifier"),
+        receipt,
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert result.reward == 1.0
+    assert calls == [
+        "/admin/v1/grader/verify-agent-pocs",
+        "/admin/v1/grader/query-poc",
+    ]

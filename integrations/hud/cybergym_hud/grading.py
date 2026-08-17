@@ -41,11 +41,12 @@ async def verify_original_any_of(
     agent_id: str,
     base_url: str,
     api_key: str,
+    bearer_auth: bool = False,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> EvaluationResult:
     """Run upstream verification, then score whether any task-bound record passes."""
 
-    headers = {"X-API-Key": api_key}
+    headers = {"Authorization": f"Bearer {api_key}"} if bearer_auth else {"X-API-Key": api_key}
     base_url = base_url.rstrip("/")
     verify_missing = False
     try:
@@ -115,14 +116,23 @@ async def grade_receipt(
         return _error("native receipt does not match the scheduled task binding", agent_id=receipt.agent_id)
     if receipt.status != "completed" or not receipt.agent_id:
         return _error(receipt.error or "native OpenHands run did not complete", agent_id=receipt.agent_id)
-    secret = (api_key if api_key is not None else os.environ.get("CYBERGYM_API_KEY", "")).strip()
+    admin_url = os.environ.get("CG_DAYTONA_GRADER_ADMIN_URL", "").strip().rstrip("/")
+    if admin_url:
+        secret = os.environ.get("CG_DAYTONA_RELAY_ADMIN_TOKEN", "").strip()
+        grader_url = admin_url
+        bearer_auth = True
+    else:
+        secret = (api_key if api_key is not None else os.environ.get("CYBERGYM_API_KEY", "")).strip()
+        grader_url = binding.server
+        bearer_auth = False
     if not secret:
         return _error("CYBERGYM_API_KEY is required for upstream verification", agent_id=receipt.agent_id)
     return await verify_original_any_of(
         task_id=binding.task_id,
         agent_id=receipt.agent_id,
-        base_url=binding.server,
+        base_url=grader_url,
         api_key=secret,
+        bearer_auth=bearer_auth,
         transport=transport,
     )
 

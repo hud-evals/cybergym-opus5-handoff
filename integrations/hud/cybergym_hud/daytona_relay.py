@@ -123,6 +123,40 @@ def build_app(*, registry: Path, upstream: str, admin_token: str | None = None) 
             _delete_binding(registry, token)
             return Response(status_code=204)
 
+        @app.post("/admin/v1/grader/{operation}")
+        async def coordinator_grader(operation: str, request: Request) -> Response:
+            _require_admin(request, admin_token)
+            if operation not in {"verify-agent-pocs", "query-poc"}:
+                raise HTTPException(status_code=404)
+            content_length = request.headers.get("content-length")
+            if content_length is None or not content_length.isdigit() or int(content_length) > 4096:
+                raise HTTPException(status_code=413, detail="grader request exceeds relay limit")
+            try:
+                body = await request.json()
+            except (UnicodeError, json.JSONDecodeError) as exc:
+                raise HTTPException(status_code=400, detail="grader request is malformed") from exc
+            agent_id = body.get("agent_id") if isinstance(body, dict) else None
+            if (
+                not isinstance(agent_id, str)
+                or len(agent_id) != 32
+                or any(character not in "0123456789abcdef" for character in agent_id)
+            ):
+                raise HTTPException(status_code=400, detail="grader request omitted its agent identity")
+            upstream_key = os.environ.get("CYBERGYM_API_KEY", "").strip()
+            if not upstream_key:
+                raise HTTPException(status_code=503, detail="relay grader credential is unavailable")
+            async with httpx.AsyncClient(timeout=1200) as client:
+                response = await client.post(
+                    f"{upstream}/{operation}",
+                    headers={"X-API-Key": upstream_key},
+                    json={"agent_id": agent_id},
+                )
+            return Response(
+                content=response.content,
+                status_code=response.status_code,
+                media_type=response.headers.get("content-type"),
+            )
+
     @app.api_route("/{token}/{rest:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"])
     async def relay(token: str, rest: str, request: Request) -> Response:
         binding = _load_binding(registry, token)

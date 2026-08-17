@@ -6,6 +6,7 @@ import stat
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from daytona import DaytonaNotFoundError
 from fastapi.testclient import TestClient
@@ -246,7 +247,10 @@ def test_relay_rejects_unknown_paths_and_cross_task_submissions(tmp_path: Path) 
     assert response.status_code == 403
 
 
-def test_relay_admin_creates_and_deletes_private_task_binding(tmp_path: Path) -> None:
+def test_relay_admin_creates_and_deletes_private_task_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     registry = tmp_path / "registry"
     registry.mkdir(mode=0o700)
     admin_token = "b" * 64
@@ -276,6 +280,42 @@ def test_relay_admin_creates_and_deletes_private_task_binding(tmp_path: Path) ->
     )
     assert deleted.status_code == 204
     assert not binding.exists()
+
+    upstream_calls = []
+
+    class AsyncClient:
+        def __init__(self, *, timeout: int):
+            assert timeout == 1200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url: str, *, headers, json):
+            upstream_calls.append((url, headers, json))
+            return httpx.Response(
+                200,
+                json=[],
+                request=httpx.Request("POST", url),
+            )
+
+    monkeypatch.setenv("CYBERGYM_API_KEY", "upstream-secret")
+    monkeypatch.setattr("cybergym_hud.daytona_relay.httpx.AsyncClient", AsyncClient)
+    graded = client.post(
+        "/admin/v1/grader/query-poc",
+        json={"agent_id": "a" * 32},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert graded.status_code == 200
+    assert upstream_calls == [
+        (
+            "http://127.0.0.1:8666/query-poc",
+            {"X-API-Key": "upstream-secret"},
+            {"agent_id": "a" * 32},
+        )
+    ]
 
 
 def test_remote_relay_registration_is_authenticated_and_released(
