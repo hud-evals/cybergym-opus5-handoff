@@ -16,11 +16,59 @@ CyberGym is a large-scale, high-quality cybersecurity evaluation framework desig
 
 ## Claude Opus 5 Nix/Daytona handoff
 
-On branch `agent/cybergym-daytona-anthropic`, use the concise reproducible
-operator flow in [`integrations/hud/ANTHROPIC_NIX.md`](integrations/hud/ANTHROPIC_NIX.md).
-It pins direct `claude-opus-5`, keeps secrets outside Git, preserves the
-no-public-egress task runtime, and exposes setup/preflight/smoke/campaign apps
-through the locked Nix flake.
+This flow requires a native Linux x86_64 machine with Docker and Nix flakes.
+It pins direct `claude-opus-5`, keeps secrets outside Git, and preserves the
+no-public-egress task runtime.
+
+```bash
+git fetch hud-evals
+git switch agent/cybergym-daytona-anthropic
+
+nix develop
+nix run .#setup
+sudo -E nix run .#configure
+sudo integrations/hud/ops/install-service.sh
+nix run .#preflight
+```
+
+`configure` privately prompts for `HUD_API_KEY`, `ANTHROPIC_API_KEY`, and
+`DAYTONA_API_KEY`. It stores protected environment files under
+`/etc/cybergym`; no secret should be committed, passed in argv, or written to
+shell history.
+
+For Daytona, add the deployment-specific non-secret task-relay URL/CIDRs and
+campaign paths to `/etc/cybergym/runner.env`:
+
+```bash
+CG_DAYTONA_RELAY_URL=https://YOUR_TASK_RELAY
+CG_DAYTONA_RELAY_CIDRS=RELAY_IPV4/32
+CG_DAYTONA_TASK_FILE=/absolute/path/to/task-ids.txt
+CG_ARTIFACT_PREFLIGHT_REPORT=/absolute/path/to/full-corpus-preflight.json
+```
+
+Then prove the Daytona placement and network boundary without inference:
+
+```bash
+nix run .#campaign-preflight
+nix run .#daytona-preflight
+```
+
+Run one paid smoke only after both preflights pass:
+
+```bash
+nix run .#smoke -- --confirm-spend
+```
+
+Start or resume the exact selected Daytona campaign:
+
+```bash
+nix run .#daytona-campaign -- --confirm-paid-selection
+```
+
+The HUD Job name is `cybergym-claude-opus-5-2`. Terminal infrastructure-error
+rows remain pending and are retried only after their remote receipt is
+reconciled. Additional detail is available in
+[`integrations/hud/ANTHROPIC_NIX.md`](integrations/hud/ANTHROPIC_NIX.md).
 
 ## Installation
 Require python and docker environment.
