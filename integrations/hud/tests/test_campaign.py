@@ -82,6 +82,15 @@ def test_paid_campaign_profile_is_exact_and_width_is_capped(tmp_path: Path) -> N
             max_concurrent=1,
             shard_size=12,
         )
+    daytona = replace(
+        config,
+        execution_backend="daytona-private",
+        daytona_ledger_path=tmp_path / "daytona.jsonl",
+        daytona_known_hosts=tmp_path / "known-hosts",
+    )
+    validate_campaign_profile(daytona, max_concurrent=60, shard_size=60)
+    with pytest.raises(ValueError, match="max_concurrent"):
+        validate_campaign_profile(daytona, max_concurrent=61, shard_size=60)
 
 
 def test_paid_campaign_requires_matching_no_internet_preflight(

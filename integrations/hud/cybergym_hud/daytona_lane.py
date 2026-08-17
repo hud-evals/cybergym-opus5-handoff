@@ -51,6 +51,7 @@ def validate_daytona_contract() -> dict[str, Any]:
         or payload.get("merge_with_native_campaign") is not False
         or payload.get("job_name") != "cybergym-gpt5.6-sol-2"
         or payload.get("runtime", {}).get("image") != DAYTONA_IMAGE
+        or payload.get("runtime", {}).get("max_concurrent") != 60
         or payload.get("runtime", {}).get("network")
         != "host_cidr_allowlist_plus_tls_resolve_before_workspace_stage_and_action_server"
     ):

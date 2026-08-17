@@ -455,6 +455,20 @@ def test_batch_selection_requires_an_explicit_full_catalog_paid_guard() -> None:
     )
     assert _resolve_selection(first_two, parser) == task_ids(root)[:2]
 
+    daytona = SimpleNamespace(
+        repository_root=root,
+        task_ids=[task_ids(root)[0]],
+        all=False,
+        first_n=None,
+        confirm_paid_all=False,
+        max_concurrent=60,
+        execution_backend="daytona-private",
+    )
+    assert _resolve_selection(daytona, parser) == (task_ids(root)[0],)
+    daytona.max_concurrent = 61
+    with pytest.raises(SystemExit):
+        _resolve_selection(daytona, parser)
+
     paid_all = SimpleNamespace(
         repository_root=root,
         task_ids=[],

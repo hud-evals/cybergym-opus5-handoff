@@ -49,6 +49,7 @@ def test_daytona_contract_is_separate_and_noncanonical() -> None:
     assert contract["job_name"] == "cybergym-gpt5.6-sol-2"
     assert contract["canonical_native_result"] is False
     assert contract["merge_with_native_campaign"] is False
+    assert contract["runtime"]["max_concurrent"] == 60
 
 
 def test_daytona_campaign_inputs_are_private_and_deterministic(tmp_path: Path) -> None:

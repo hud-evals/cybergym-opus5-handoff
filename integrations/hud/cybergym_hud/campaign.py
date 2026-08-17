@@ -52,6 +52,8 @@ CAMPAIGN_TIMEOUT_SECONDS = 3600
 CAMPAIGN_MAX_CONCURRENT = 6
 DEFAULT_SHARD_SIZE = 12
 MAX_SHARD_SIZE = 24
+DAYTONA_CAMPAIGN_MAX_CONCURRENT = 60
+DAYTONA_MAX_SHARD_SIZE = 60
 TERMINAL_STATUSES = frozenset({"completed", "error", "cancelled"})
 
 
@@ -141,10 +143,14 @@ def validate_campaign_profile(config: NativeOpenHandsConfig, *, max_concurrent: 
     }
     if drift:
         raise ValueError(f"CyberGym paid campaign profile drift: {drift}")
-    if not 1 <= max_concurrent <= CAMPAIGN_MAX_CONCURRENT:
-        raise ValueError(f"max_concurrent must be between 1 and {CAMPAIGN_MAX_CONCURRENT}")
-    if not 1 <= shard_size <= MAX_SHARD_SIZE:
-        raise ValueError(f"shard_size must be between 1 and {MAX_SHARD_SIZE}")
+    max_allowed = (
+        DAYTONA_CAMPAIGN_MAX_CONCURRENT if config.execution_backend == "daytona-private" else CAMPAIGN_MAX_CONCURRENT
+    )
+    shard_max = DAYTONA_MAX_SHARD_SIZE if config.execution_backend == "daytona-private" else MAX_SHARD_SIZE
+    if not 1 <= max_concurrent <= max_allowed:
+        raise ValueError(f"max_concurrent must be between 1 and {max_allowed}")
+    if not 1 <= shard_size <= shard_max:
+        raise ValueError(f"shard_size must be between 1 and {shard_max}")
 
 
 def load_preflight_fingerprints(

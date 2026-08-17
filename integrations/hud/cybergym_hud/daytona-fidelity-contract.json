@@ -18,6 +18,7 @@
     "cpu": 4,
     "memory_gib": 8,
     "disk_gib": 10,
+    "max_concurrent": 60,
     "network": "host_cidr_allowlist_plus_tls_resolve_before_workspace_stage_and_action_server",
     "action_transport": "private_ssh_local_forward",
     "grader_transport": "task_scoped_https_relay_to_vm101_internal_server",

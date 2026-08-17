@@ -40,6 +40,7 @@ from .taskset import make_taskset
 from .taskset import task_ids as catalog_task_ids
 
 DEFAULT_MAX_CONCURRENT = 15
+DAYTONA_MAX_CONCURRENT = 60
 
 
 def _validate_job_name(job_name: str | None) -> str | None:
@@ -322,10 +323,10 @@ async def run_many(
         raise ValueError("run_many requires at least one task ID")
     if len(selected) != len(set(selected)):
         raise ValueError("run_many does not accept duplicate task IDs")
-    if not 1 <= max_concurrent <= DEFAULT_MAX_CONCURRENT:
-        raise ValueError(f"max_concurrent must be between 1 and {DEFAULT_MAX_CONCURRENT}")
-
     config = config.normalized()
+    max_allowed = DAYTONA_MAX_CONCURRENT if config.execution_backend == "daytona-private" else DEFAULT_MAX_CONCURRENT
+    if not 1 <= max_concurrent <= max_allowed:
+        raise ValueError(f"max_concurrent must be between 1 and {max_allowed}")
     validate_contract(root=config.repository_root)
     taskset = make_taskset(server=config.server, selected=selected, root=config.repository_root)
 
@@ -473,8 +474,13 @@ def _resolve_selection(args: argparse.Namespace, parser: argparse.ArgumentParser
         parser.error("duplicate task IDs are not allowed")
     if set(selected) == set(catalog) and not args.confirm_paid_all:
         parser.error("the complete paid catalog requires --confirm-paid-all")
-    if not 1 <= args.max_concurrent <= DEFAULT_MAX_CONCURRENT:
-        parser.error(f"--max-concurrent must be between 1 and {DEFAULT_MAX_CONCURRENT}")
+    max_allowed = (
+        DAYTONA_MAX_CONCURRENT
+        if getattr(args, "execution_backend", "native-docker") == "daytona-private"
+        else DEFAULT_MAX_CONCURRENT
+    )
+    if not 1 <= args.max_concurrent <= max_allowed:
+        parser.error(f"--max-concurrent must be between 1 and {max_allowed}")
     return selected
 
 

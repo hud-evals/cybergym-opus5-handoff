@@ -257,8 +257,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--artifact-preflight-concurrency", type=int, default=6)
     parser.add_argument("--daytona-preflight-report", type=Path, required=True)
     parser.add_argument("--daytona-known-hosts", type=Path, required=True)
-    parser.add_argument("--max-concurrent", type=int, default=5)
-    parser.add_argument("--shard-size", type=int, default=12)
+    parser.add_argument("--max-concurrent", type=int, default=60)
+    parser.add_argument("--shard-size", type=int, default=60)
     parser.add_argument("--keep-tmp", action="store_true")
     return parser
 
