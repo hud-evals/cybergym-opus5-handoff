@@ -313,7 +313,10 @@ def test_openhands_subprocess_proxy_uses_private_daytona_attachment(
     def fake_runtime(**kwargs):
         assert kwargs["task_id"] == "arvo:10013"
         assert kwargs["server"] == "http://172.30.0.1:8666"
-        yield SimpleNamespace(action_url="http://127.0.0.1:43210")
+        yield SimpleNamespace(
+            action_url="http://127.0.0.1:43210",
+            submission_url="https://relay.example/token",
+        )
 
     monkeypatch.setattr("cybergym_hud.daytona_lane.configure_attached_runtime", fake_configure)
     monkeypatch.setattr("cybergym_hud.daytona_lane.prepared_daytona_runtime", fake_runtime)
@@ -347,7 +350,7 @@ def test_openhands_subprocess_proxy_uses_private_daytona_attachment(
         "CYBERGYM_REASONING_EFFORT": "xhigh",
         "CYBERGYM_DAYTONA_ACTION_URL": "http://127.0.0.1:43210",
     }
-    assert (workspace / "submit.sh").read_text() == ("curl http://127.0.0.1:8666/submit-vul\n")
+    assert (workspace / "submit.sh").read_text() == ("curl https://relay.example/token/submit-vul\n")
 
 
 @pytest.mark.asyncio

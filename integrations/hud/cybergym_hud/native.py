@@ -384,13 +384,17 @@ class _OpenHandsSubprocessProxy:
                 )
 
                 workspace = configure_attached_runtime(config_path)
-                rewrite_submit_server(workspace, source=self._server)
                 with prepared_daytona_runtime(
                     task_id=self._task_id,
                     server=self._server,
                     ledger_path=self._daytona_ledger_path,
                     known_hosts=self._daytona_known_hosts,
                 ) as runtime:
+                    rewrite_submit_server(
+                        workspace,
+                        source=self._server,
+                        replacement=runtime.submission_url,
+                    )
                     child_env["CYBERGYM_DAYTONA_ACTION_URL"] = runtime.action_url
                     kwargs["env"] = child_env
                     return self._delegate.run(command, *args, **kwargs)

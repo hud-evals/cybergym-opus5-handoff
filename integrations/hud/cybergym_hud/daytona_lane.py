@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import secrets
 import stat
 import threading
 import time
@@ -44,7 +45,8 @@ def validate_daytona_contract() -> dict[str, Any]:
         or payload.get("merge_with_native_campaign") is not False
         or payload.get("job_name") != "cybergym-gpt5.6-sol-2"
         or payload.get("runtime", {}).get("image") != DAYTONA_IMAGE
-        or payload.get("runtime", {}).get("network") != "block_all_after_action_server_and_ssh_tunnel"
+        or payload.get("runtime", {}).get("network")
+        != "domain_allowlist_task_relay_only_after_action_server_and_ssh_tunnel"
     ):
         raise RuntimeError("CyberGym Daytona fidelity contract drifted")
     return payload
@@ -100,13 +102,9 @@ class _SshTunnel:
         *,
         username: str,
         known_hosts: Path,
-        grader_host: str,
-        grader_port: int,
     ) -> None:
         self.username = username
         self.known_hosts = known_hosts
-        self.grader_host = grader_host
-        self.grader_port = grader_port
         self.action_local_port: int | None = None
         self._thread = threading.Thread(target=self._thread_main, daemon=True)
         self._ready = threading.Event()
@@ -124,7 +122,7 @@ class _SshTunnel:
             raise RuntimeError("Daytona SSH tunnel omitted its local action port")
 
     def close(self) -> None:
-        if self._loop is not None and self._stop is not None:
+        if self._thread.is_alive() and self._loop is not None and not self._loop.is_closed() and self._stop is not None:
             self._loop.call_soon_threadsafe(self._stop.set)
         self._thread.join(timeout=30)
         if self._thread.is_alive():
@@ -155,36 +153,58 @@ class _SshTunnel:
                 "127.0.0.1",
                 ACTION_PORT,
             )
-            remote_listener = await connection.forward_remote_port(
-                "127.0.0.1",
-                GRADER_TUNNEL_PORT,
-                self.grader_host,
-                self.grader_port,
-            )
             try:
                 self.action_local_port = local_listener.get_port()
                 self._ready.set()
                 await self._stop.wait()
             finally:
-                remote_listener.close()
                 local_listener.close()
-                await remote_listener.wait_closed()
                 await local_listener.wait_closed()
 
 
 @dataclass(frozen=True)
 class DaytonaPreparedRuntime:
     action_url: str
+    submission_url: str
     sandbox_id: str
 
 
-def _server_address(server: str) -> tuple[str, int]:
+def _relay_settings() -> tuple[str, str, Path]:
     from urllib.parse import urlsplit
 
-    parsed = urlsplit(server)
-    if parsed.scheme != "http" or parsed.hostname is None:
-        raise ValueError("Daytona grader upstream must be a private HTTP URL")
-    return parsed.hostname, parsed.port or 80
+    base_url = os.environ.get("CG_DAYTONA_RELAY_URL", "").strip().rstrip("/")
+    parsed = urlsplit(base_url)
+    if parsed.scheme != "https" or parsed.hostname is None or parsed.path:
+        raise ValueError("CG_DAYTONA_RELAY_URL must be an HTTPS origin without a path")
+    registry_raw = os.environ.get("CG_DAYTONA_RELAY_REGISTRY", "").strip()
+    if not registry_raw:
+        raise ValueError("CG_DAYTONA_RELAY_REGISTRY is required")
+    return base_url, parsed.hostname, Path(registry_raw).expanduser().resolve()
+
+
+def _register_relay(registry: Path, *, task_id: str) -> tuple[str, Path]:
+    registry.mkdir(parents=True, exist_ok=True)
+    os.chmod(registry, 0o700)
+    token = secrets.token_hex(32)
+    path = registry / f"{token}.json"
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        os.fchmod(descriptor, 0o600)
+        _write_all(
+            descriptor,
+            json.dumps(
+                {"task_id": task_id, "expires_at": int(time.time()) + 2 * 60 * 60},
+                sort_keys=True,
+            ).encode(),
+        )
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    return token, path
 
 
 def _action_server_command() -> str:
@@ -211,12 +231,9 @@ def _wait_action_server(url: str, *, timeout: float = 120.0) -> None:
     raise TimeoutError("Daytona OpenHands action server did not become ready") from last_error
 
 
-def _require_blocked_network(sandbox: Any) -> None:
-    dns = sandbox.process.exec(
-        'python3 -c "import socket,sys; '
-        "\ntry: socket.getaddrinfo('github.com',443)"
-        "\nexcept OSError: sys.exit(0)"
-        '\nsys.exit(1)"',
+def _require_blocked_network(sandbox: Any, *, relay_base_url: str) -> None:
+    web = sandbox.process.exec(
+        "curl -fsS --max-time 5 https://github.com >/dev/null 2>&1; test $? -ne 0",
         timeout=15,
     )
     ip = sandbox.process.exec(
@@ -226,12 +243,12 @@ def _require_blocked_network(sandbox: Any) -> None:
         '\nsys.exit(1)"',
         timeout=15,
     )
-    grader = sandbox.process.exec(
-        f"python3 -c \"import socket; socket.create_connection(('127.0.0.1',{GRADER_TUNNEL_PORT}),3).close()\"",
+    relay = sandbox.process.exec(
+        f"curl -fsS --max-time 10 {relay_base_url}/healthz >/dev/null",
         timeout=15,
     )
-    if dns.exit_code != 0 or ip.exit_code != 0 or grader.exit_code != 0:
-        raise RuntimeError("Daytona network isolation or private grader tunnel proof failed")
+    if web.exit_code != 0 or ip.exit_code != 0 or relay.exit_code != 0:
+        raise RuntimeError("Daytona network isolation or task relay proof failed")
 
 
 def _delete_exact(daytona: Daytona, sandbox: Any) -> None:
@@ -273,7 +290,9 @@ def prepared_daytona_runtime(
         raise RuntimeError("DAYTONA_API_KEY is required for the separate Daytona lane")
     if not known_hosts.is_file() or stat.S_ISLNK(known_hosts.lstat().st_mode):
         raise RuntimeError("Daytona SSH known-hosts pin is missing or unsafe")
-    grader_host, grader_port = _server_address(server)
+    if not server.startswith("http://"):
+        raise ValueError("Daytona lane requires the private HTTP grader identity")
+    relay_base_url, relay_hostname, relay_registry = _relay_settings()
     daytona = Daytona()
     sandbox = daytona.create(
         CreateSandboxFromImageParams(
@@ -296,7 +315,9 @@ def prepared_daytona_runtime(
         task_id=task_id,
     )
     tunnel: _SshTunnel | None = None
+    relay_path: Path | None = None
     try:
+        relay_token, relay_path = _register_relay(relay_registry, task_id=task_id)
         sandbox.process.create_session("openhands-action-server")
         sandbox.process.execute_session_command(
             "openhands-action-server",
@@ -306,28 +327,43 @@ def prepared_daytona_runtime(
         tunnel = _SshTunnel(
             username=ssh.token,
             known_hosts=known_hosts,
-            grader_host=grader_host,
-            grader_port=grader_port,
         )
         tunnel.start()
         if tunnel.action_local_port is None:
             raise RuntimeError("Daytona SSH tunnel omitted its action port")
         action_url = f"http://127.0.0.1:{tunnel.action_local_port}"
         _wait_action_server(action_url)
-        sandbox.update_network_settings(network_block_all=True)
-        _require_blocked_network(sandbox)
-        _wait_action_server(action_url)
-        yield DaytonaPreparedRuntime(action_url=action_url, sandbox_id=sandbox_id)
-    finally:
-        if tunnel is not None:
-            tunnel.close()
-        _delete_exact(daytona, sandbox)
-        record_sandbox_event(
-            ledger_path,
-            event="deleted",
-            sandbox_id=sandbox_id,
-            task_id=task_id,
+        sandbox.update_network_settings(
+            network_block_all=False,
+            domain_allow_list=relay_hostname,
         )
+        _require_blocked_network(sandbox, relay_base_url=relay_base_url)
+        _wait_action_server(action_url)
+        yield DaytonaPreparedRuntime(
+            action_url=action_url,
+            submission_url=f"{relay_base_url}/{relay_token}",
+            sandbox_id=sandbox_id,
+        )
+    finally:
+        tunnel_error: BaseException | None = None
+        if tunnel is not None:
+            try:
+                tunnel.close()
+            except BaseException as exc:
+                tunnel_error = exc
+        try:
+            _delete_exact(daytona, sandbox)
+        finally:
+            record_sandbox_event(
+                ledger_path,
+                event="deleted",
+                sandbox_id=sandbox_id,
+                task_id=task_id,
+            )
+        if relay_path is not None:
+            relay_path.unlink(missing_ok=True)
+        if tunnel_error is not None:
+            raise RuntimeError("Daytona SSH tunnel cleanup failed") from tunnel_error
 
 
 def configure_attached_runtime(config_path: Path) -> Path:
@@ -358,7 +394,7 @@ def configure_attached_runtime(config_path: Path) -> Path:
     return Path(str(core["workspace_base"]))
 
 
-def rewrite_submit_server(workspace: Path, *, source: str) -> None:
+def rewrite_submit_server(workspace: Path, *, source: str, replacement: str) -> None:
     submit = workspace / "submit.sh"
     before = submit.lstat()
     if not stat.S_ISREG(before.st_mode):
@@ -367,7 +403,7 @@ def rewrite_submit_server(workspace: Path, *, source: str) -> None:
     if text.count(source) != 1:
         raise RuntimeError("generated submit.sh did not contain exactly one private server URL")
     submit.write_text(
-        text.replace(source, f"http://127.0.0.1:{GRADER_TUNNEL_PORT}"),
+        text.replace(source, replacement),
         encoding="utf-8",
     )
 
