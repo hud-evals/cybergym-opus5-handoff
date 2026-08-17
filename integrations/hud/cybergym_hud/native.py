@@ -394,6 +394,7 @@ class _OpenHandsSubprocessProxy:
                         workspace,
                         source=self._server,
                         replacement=runtime.submission_url,
+                        curl_resolve=runtime.submission_curl_resolve,
                     )
                     child_env["CYBERGYM_DAYTONA_ACTION_URL"] = runtime.action_url
                     kwargs["env"] = child_env

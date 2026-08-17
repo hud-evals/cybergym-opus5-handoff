@@ -48,20 +48,27 @@ def test_rewrite_submit_server_is_exact_and_fails_closed(tmp_path: Path) -> None
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     submit = workspace / "submit.sh"
-    submit.write_text("curl http://172.30.0.1:8666/submit-vul\n", encoding="utf-8")
+    submit.write_text(
+        "curl -X POST http://172.30.0.1:8666/submit-vul\n",
+        encoding="utf-8",
+    )
 
     rewrite_submit_server(
         workspace,
         source="http://172.30.0.1:8666",
         replacement="https://relay.example/token",
+        curl_resolve="relay.example:443:203.0.113.10",
     )
 
-    assert submit.read_text() == "curl https://relay.example/token/submit-vul\n"
+    assert submit.read_text() == (
+        "curl --resolve relay.example:443:203.0.113.10 -X POST https://relay.example/token/submit-vul\n"
+    )
     with pytest.raises(RuntimeError, match="exactly one"):
         rewrite_submit_server(
             workspace,
             source="http://172.30.0.1:8666",
             replacement="https://relay.example/token",
+            curl_resolve="relay.example:443:203.0.113.10",
         )
 
 

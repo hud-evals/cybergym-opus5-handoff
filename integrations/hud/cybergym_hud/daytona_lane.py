@@ -47,7 +47,7 @@ def validate_daytona_contract() -> dict[str, Any]:
         or payload.get("job_name") != "cybergym-gpt5.6-sol-2"
         or payload.get("runtime", {}).get("image") != DAYTONA_IMAGE
         or payload.get("runtime", {}).get("network")
-        != "host_cidr_plus_domain_allowlist_task_relay_only_after_action_server_and_ssh_tunnel"
+        != "host_cidr_allowlist_plus_tls_resolve_task_relay_only_after_action_server_and_ssh_tunnel"
     ):
         raise RuntimeError("CyberGym Daytona fidelity contract drifted")
     return payload
@@ -167,10 +167,11 @@ class _SshTunnel:
 class DaytonaPreparedRuntime:
     action_url: str
     submission_url: str
+    submission_curl_resolve: str
     sandbox_id: str
 
 
-def _relay_settings() -> tuple[str, str, str, Path]:
+def _relay_settings() -> tuple[str, str, str, str, Path]:
     from urllib.parse import urlsplit
 
     base_url = os.environ.get("CG_DAYTONA_RELAY_URL", "").strip().rstrip("/")
@@ -184,14 +185,20 @@ def _relay_settings() -> tuple[str, str, str, Path]:
     cidrs = [value.strip() for value in cidrs_raw.split(",") if value.strip()]
     if not cidrs:
         raise ValueError("CG_DAYTONA_RELAY_CIDRS is required")
+    relay_ipv4: str | None = None
     for value in cidrs:
         network = ipaddress.ip_network(value, strict=True)
         if network.is_private or network.is_loopback or network.num_addresses != 1:
             raise ValueError("relay allowlist must contain only public /32 or /128 hosts")
+        if network.version == 4 and relay_ipv4 is None:
+            relay_ipv4 = str(network.network_address)
+    if relay_ipv4 is None:
+        raise ValueError("relay allowlist requires at least one public IPv4 host")
     return (
         base_url,
         parsed.hostname,
         ",".join(cidrs),
+        relay_ipv4,
         Path(registry_raw).expanduser().resolve(),
     )
 
@@ -245,7 +252,13 @@ def _wait_action_server(url: str, *, timeout: float = 120.0) -> None:
     raise TimeoutError("Daytona OpenHands action server did not become ready") from last_error
 
 
-def _require_blocked_network(sandbox: Any, *, relay_base_url: str) -> None:
+def _require_blocked_network(
+    sandbox: Any,
+    *,
+    relay_base_url: str,
+    relay_hostname: str,
+    relay_ipv4: str,
+) -> None:
     deadline = time.monotonic() + 60
     observed = (-1, -1, -1)
     while time.monotonic() < deadline:
@@ -261,7 +274,7 @@ def _require_blocked_network(sandbox: Any, *, relay_base_url: str) -> None:
             timeout=15,
         )
         relay = sandbox.process.exec(
-            f"curl -fsS --max-time 10 {relay_base_url}/healthz >/dev/null",
+            f"curl -fsS --max-time 10 --resolve {relay_hostname}:443:{relay_ipv4} {relay_base_url}/healthz >/dev/null",
             timeout=15,
         )
         observed = (web.exit_code, ip.exit_code, relay.exit_code)
@@ -315,7 +328,13 @@ def prepared_daytona_runtime(
         raise RuntimeError("Daytona SSH known-hosts pin is missing or unsafe")
     if not server.startswith("http://"):
         raise ValueError("Daytona lane requires the private HTTP grader identity")
-    relay_base_url, relay_hostname, relay_cidrs, relay_registry = _relay_settings()
+    (
+        relay_base_url,
+        relay_hostname,
+        relay_cidrs,
+        relay_ipv4,
+        relay_registry,
+    ) = _relay_settings()
     daytona = Daytona()
     sandbox = daytona.create(
         CreateSandboxFromImageParams(
@@ -358,13 +377,18 @@ def prepared_daytona_runtime(
         _wait_action_server(action_url)
         sandbox.update_network_settings(
             network_allow_list=relay_cidrs,
-            domain_allow_list=relay_hostname,
         )
-        _require_blocked_network(sandbox, relay_base_url=relay_base_url)
+        _require_blocked_network(
+            sandbox,
+            relay_base_url=relay_base_url,
+            relay_hostname=relay_hostname,
+            relay_ipv4=relay_ipv4,
+        )
         _wait_action_server(action_url)
         yield DaytonaPreparedRuntime(
             action_url=action_url,
             submission_url=f"{relay_base_url}/{relay_token}",
+            submission_curl_resolve=f"{relay_hostname}:443:{relay_ipv4}",
             sandbox_id=sandbox_id,
         )
     finally:
@@ -417,7 +441,13 @@ def configure_attached_runtime(config_path: Path) -> Path:
     return Path(str(core["workspace_base"]))
 
 
-def rewrite_submit_server(workspace: Path, *, source: str, replacement: str) -> None:
+def rewrite_submit_server(
+    workspace: Path,
+    *,
+    source: str,
+    replacement: str,
+    curl_resolve: str,
+) -> None:
     submit = workspace / "submit.sh"
     before = submit.lstat()
     if not stat.S_ISREG(before.st_mode):
@@ -425,8 +455,13 @@ def rewrite_submit_server(workspace: Path, *, source: str, replacement: str) -> 
     text = submit.read_text(encoding="utf-8")
     if text.count(source) != 1:
         raise RuntimeError("generated submit.sh did not contain exactly one private server URL")
+    if text.count("curl -X POST") != 1:
+        raise RuntimeError("generated submit.sh did not contain the expected curl invocation")
     submit.write_text(
-        text.replace(source, replacement),
+        text.replace(source, replacement).replace(
+            "curl -X POST",
+            f"curl --resolve {curl_resolve} -X POST",
+        ),
         encoding="utf-8",
     )
 
