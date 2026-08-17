@@ -505,16 +505,10 @@ def main() -> None:
         execution_backend=args.execution_backend,
         daytona_ledger_path=args.daytona_ledger,
         daytona_known_hosts=args.daytona_known_hosts,
-        runtime_nano_cpus=(
-            CAMPAIGN_RUNTIME_NANO_CPUS if args.execution_backend == "daytona-private" else None
-        ),
-        runtime_memory_bytes=(
-            CAMPAIGN_RUNTIME_MEMORY_BYTES if args.execution_backend == "daytona-private" else None
-        ),
+        runtime_nano_cpus=(CAMPAIGN_RUNTIME_NANO_CPUS if args.execution_backend == "daytona-private" else None),
+        runtime_memory_bytes=(CAMPAIGN_RUNTIME_MEMORY_BYTES if args.execution_backend == "daytona-private" else None),
         runtime_memory_swap_bytes=(
-            CAMPAIGN_RUNTIME_MEMORY_SWAP_BYTES
-            if args.execution_backend == "daytona-private"
-            else None
+            CAMPAIGN_RUNTIME_MEMORY_SWAP_BYTES if args.execution_backend == "daytona-private" else None
         ),
     )
     if len(selected) == 1:
