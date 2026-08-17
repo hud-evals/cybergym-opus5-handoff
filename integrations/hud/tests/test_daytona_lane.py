@@ -7,11 +7,15 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from daytona import DaytonaNotFoundError
 from fastapi.testclient import TestClient
 
+from cybergym_hud.daytona_campaign import _load_task_file, _require_daytona_preflight
 from cybergym_hud.daytona_lane import (
     RUNTIME_CLASS,
     configure_attached_runtime,
+    open_sandbox_bindings,
+    reconcile_daytona_sandboxes,
     record_sandbox_event,
     rewrite_submit_server,
     stage_workspace,
@@ -45,6 +49,33 @@ def test_daytona_contract_is_separate_and_noncanonical() -> None:
     assert contract["job_name"] == "cybergym-gpt5.6-sol-2"
     assert contract["canonical_native_result"] is False
     assert contract["merge_with_native_campaign"] is False
+
+
+def test_daytona_campaign_inputs_are_private_and_deterministic(tmp_path: Path) -> None:
+    task_file = tmp_path / "tasks.txt"
+    task_file.write_text("arvo:1\noss-fuzz:2\n", encoding="utf-8")
+    task_file.chmod(0o600)
+    assert _load_task_file(task_file, catalog=("arvo:1", "oss-fuzz:2", "oss-fuzz:3")) == (
+        "arvo:1",
+        "oss-fuzz:2",
+    )
+
+    report = tmp_path / "daytona-preflight.json"
+    report.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "no_model_call": True,
+                "image": validate_daytona_contract()["runtime"]["image"],
+                "network_policy": "daytona-funnel-host-cidr-allowlist-task-relay-v1",
+                "workspace_stage_verified": True,
+                "sandbox_id_recorded": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    report.chmod(0o600)
+    _require_daytona_preflight(report)
 
 
 def test_rewrite_submit_server_is_exact_and_fails_closed(tmp_path: Path) -> None:
@@ -150,6 +181,44 @@ def test_daytona_ledger_is_private_append_only_and_task_bound(tmp_path: Path) ->
     rows = [json.loads(line) for line in ledger.read_text().splitlines()]
     assert [row["event"] for row in rows] == ["created", "deleted"]
     assert {row["task_id"] for row in rows} == {"arvo:10013"}
+    assert open_sandbox_bindings(ledger) == {}
+
+
+def test_daytona_ledger_reconcile_deletes_only_exact_lane_sandbox(tmp_path: Path) -> None:
+    ledger = tmp_path / "sandboxes.jsonl"
+    record_sandbox_event(
+        ledger,
+        event="created",
+        sandbox_id="sandbox-open",
+        task_id="arvo:10013",
+    )
+    sandbox = SimpleNamespace(
+        id="sandbox-open",
+        name="cybergym-fixture",
+        public=False,
+        labels={"ai.hud.cybergym.lane": "daytona-no-internet-v1"},
+    )
+
+    class Daytona:
+        def __init__(self) -> None:
+            self.sandboxes = {sandbox.id: sandbox}
+
+        def get(self, sandbox_id: str):
+            if sandbox_id not in self.sandboxes:
+                raise DaytonaNotFoundError("missing")
+            return self.sandboxes[sandbox_id]
+
+        def delete(self, target) -> None:
+            self.sandboxes.pop(target.id)
+
+    daytona = Daytona()
+    assert reconcile_daytona_sandboxes(
+        ledger,
+        expected_task_ids={"arvo:10013"},
+        daytona=daytona,
+    ) == ("sandbox-open",)
+    assert daytona.sandboxes == {}
+    assert open_sandbox_bindings(ledger) == {}
 
 
 def test_relay_rejects_unknown_paths_and_cross_task_submissions(tmp_path: Path) -> None:

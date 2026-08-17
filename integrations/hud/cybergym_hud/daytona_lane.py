@@ -40,6 +40,7 @@ LEDGER_SCHEMA = "cybergym.daytona-sandbox-ledger.v1"
 DAYTONA_CONTRACT = Path(__file__).with_name("daytona-fidelity-contract.json")
 VISIBLE_WORKSPACE_FILES = frozenset({"README.md", "description.txt", "repo-vul.tar.gz", "submit.sh"})
 MAX_WORKSPACE_BYTES = 4 * 1024 * 1024 * 1024
+MAX_LEDGER_BYTES = 8 * 1024 * 1024
 
 
 def validate_daytona_contract() -> dict[str, Any]:
@@ -99,6 +100,115 @@ def record_sandbox_event(
         os.fsync(directory)
     finally:
         os.close(directory)
+
+
+def open_sandbox_bindings(path: Path) -> dict[str, str]:
+    """Validate the append-only ledger and return created-but-not-deleted IDs."""
+
+    if not path.exists():
+        return {}
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode) or before.st_mode & 0o077 or before.st_size > MAX_LEDGER_BYTES:
+        raise RuntimeError("Daytona sandbox ledger is not a private bounded regular file")
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        opened = os.fstat(descriptor)
+        if (opened.st_dev, opened.st_ino, opened.st_size) != (before.st_dev, before.st_ino, before.st_size):
+            raise RuntimeError("Daytona sandbox ledger changed while opening")
+        chunks: list[bytes] = []
+        total = 0
+        while block := os.read(descriptor, min(1024 * 1024, MAX_LEDGER_BYTES + 1 - total)):
+            chunks.append(block)
+            total += len(block)
+            if total > MAX_LEDGER_BYTES:
+                raise RuntimeError("Daytona sandbox ledger exceeds its byte limit")
+        encoded = b"".join(chunks)
+    finally:
+        os.close(descriptor)
+    after = path.lstat()
+    if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+    ):
+        raise RuntimeError("Daytona sandbox ledger changed while reading")
+    open_bindings: dict[str, str] = {}
+    closed: set[str] = set()
+    for line in encoded.splitlines():
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("Daytona sandbox ledger contains malformed JSON") from exc
+        if not isinstance(row, dict) or set(row) != {
+            "schema",
+            "event",
+            "sandbox_id",
+            "task_id",
+            "recorded_at",
+        }:
+            raise RuntimeError("Daytona sandbox ledger row shape drifted")
+        event = row.get("event")
+        sandbox_id = row.get("sandbox_id")
+        task_id = row.get("task_id")
+        if (
+            row.get("schema") != LEDGER_SCHEMA
+            or event not in {"created", "deleted"}
+            or not isinstance(sandbox_id, str)
+            or not sandbox_id
+            or not isinstance(task_id, str)
+            or not task_id
+            or not isinstance(row.get("recorded_at"), int | float)
+        ):
+            raise RuntimeError("Daytona sandbox ledger row is invalid")
+        if event == "created":
+            if sandbox_id in open_bindings or sandbox_id in closed:
+                raise RuntimeError("Daytona sandbox ledger repeats a creation")
+            open_bindings[sandbox_id] = task_id
+        else:
+            if open_bindings.pop(sandbox_id, None) != task_id:
+                raise RuntimeError("Daytona sandbox ledger deletion is unbound")
+            closed.add(sandbox_id)
+    return open_bindings
+
+
+def reconcile_daytona_sandboxes(
+    path: Path,
+    *,
+    expected_task_ids: set[str],
+    daytona: Daytona | None = None,
+) -> tuple[str, ...]:
+    """Delete exact ledger-owned leftovers before any new paid rollout."""
+
+    open_bindings = open_sandbox_bindings(path)
+    unexpected = set(open_bindings.values()) - expected_task_ids
+    if unexpected:
+        raise RuntimeError(f"Daytona sandbox ledger contains tasks outside this campaign: {sorted(unexpected)}")
+    if not open_bindings:
+        return ()
+    client = daytona or Daytona()
+    reconciled: list[str] = []
+    for sandbox_id, task_id in sorted(open_bindings.items()):
+        try:
+            sandbox = client.get(sandbox_id)
+        except DaytonaNotFoundError:
+            sandbox = None
+        if sandbox is not None:
+            if (
+                sandbox.labels.get("ai.hud.cybergym.lane") != "daytona-no-internet-v1"
+                or not sandbox.name.startswith("cybergym-")
+                or sandbox.public is not False
+            ):
+                raise RuntimeError("refusing to delete a Daytona sandbox without the exact lane identity")
+            _delete_exact(client, sandbox)
+        record_sandbox_event(
+            path,
+            event="deleted",
+            sandbox_id=sandbox_id,
+            task_id=task_id,
+        )
+        reconciled.append(sandbox_id)
+    return tuple(reconciled)
 
 
 class _SshTunnel:

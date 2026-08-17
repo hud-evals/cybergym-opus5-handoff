@@ -144,6 +144,29 @@ def test_state_is_deterministic_mode_0600_and_contains_no_credentials(tmp_path: 
         other = CampaignState(tmp_path / "state")
         other.initialize(identity=_campaign_identity(config, ids, 1), task_ids=ids, shard_size=1)
 
+    separate = _campaign_identity(config, ids, 2, job_name="cybergym-gpt5.6-sol-2")
+    assert separate["job_name"] == "cybergym-gpt5.6-sol-2"
+
+
+@pytest.mark.asyncio
+async def test_campaign_rejects_unknown_or_reordered_selected_task_ids(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr("cybergym_hud.campaign.catalog_task_ids", lambda _root: ("arvo:1", "arvo:2"))
+    for selected in (("arvo:unknown",), ("arvo:2", "arvo:1")):
+        with pytest.raises(ValueError, match="selection"):
+            await run_campaign(
+                config,
+                state_dir=tmp_path / "state",
+                max_concurrent=1,
+                shard_size=1,
+                confirm_paid_all=True,
+                artifact_fingerprints={},
+                selected_task_ids=selected,
+            )
+
 
 def test_lock_refuses_a_second_campaign_process(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"

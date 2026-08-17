@@ -90,6 +90,7 @@ def _campaign_identity(
     shard_size: int,
     *,
     artifact_fingerprints: dict[str, str] | None = None,
+    job_name: str = CAMPAIGN_JOB_NAME,
 ) -> dict[str, Any]:
     profile = config.receipt_profile().model_dump(mode="json")
     return {
@@ -101,7 +102,7 @@ def _campaign_identity(
         "repository_root": str(config.repository_root),
         "data_dir": str(config.data_dir),
         "server": config.server,
-        "job_name": CAMPAIGN_JOB_NAME,
+        "job_name": job_name,
         "run_profile": profile,
         # Do not retain a custom endpoint that could contain a path token.
         "model_endpoint_sha256": _endpoint_digest(config.base_url),
@@ -289,6 +290,10 @@ class CampaignState:
         self._save()
 
     def _validate_loaded(self, *, task_ids: tuple[str, ...], shard_size: int) -> None:
+        identity = self.payload.get("identity")
+        expected_job_name = identity.get("job_name") if isinstance(identity, dict) else None
+        if not isinstance(expected_job_name, str) or not expected_job_name:
+            raise CampaignBlocked("campaign manifest job identity is malformed")
         expected_shards = [
             list(task_ids[offset : offset + shard_size]) for offset in range(0, len(task_ids), shard_size)
         ]
@@ -322,7 +327,7 @@ class CampaignState:
                     or not set(launched).issubset(attempt_tasks)
                     or not isinstance(returned, list)
                     or not set(returned).issubset(launched)
-                    or attempt.get("job_name") != CAMPAIGN_JOB_NAME
+                    or attempt.get("job_name") != expected_job_name
                     or not attempt.get("job_id")
                 ):
                     raise CampaignBlocked(f"campaign manifest shard {index} attempt {attempt_index} is malformed")
@@ -499,7 +504,7 @@ async def require_remote_job_receipt(job: Job, *, client: PlatformClient | None 
             if (
                 isinstance(remote, dict)
                 and _uuid_key(remote.get("id")) == _uuid_key(job.id)
-                and remote.get("name") == CAMPAIGN_JOB_NAME
+                and remote.get("name") == job.name
                 and remote.get("can_edit") is True
                 and remote.get("group_size") == 1
                 and remote.get("taskset_id") is None
@@ -679,7 +684,7 @@ def validate_attempt_result(
 ) -> None:
     """Prove the local batch result covers every selected row exactly once."""
 
-    if str(result.get("job_id")) != str(job.id) or result.get("job_name") != CAMPAIGN_JOB_NAME:
+    if str(result.get("job_id")) != str(job.id) or result.get("job_name") != job.name:
         raise CampaignBlocked("batch result is not attached to the pre-journaled named HUD Job")
     runs = result.get("runs")
     if not isinstance(runs, list) or len(runs) != len(expected_task_ids):
@@ -744,6 +749,8 @@ async def run_campaign(
     receipt_verifier: Callable[..., Any] = verify_and_persist_remote_receipt,
     native_executor: Callable[[NativeOpenHandsConfig, NativeTaskBinding], NativeReceipt] = execute_upstream_openhands,
     artifact_fingerprints: dict[str, str] | None = None,
+    selected_task_ids: tuple[str, ...] | None = None,
+    job_name: str = CAMPAIGN_JOB_NAME,
 ) -> dict[str, Any]:
     """Run deterministic shards, checkpointing before each potentially paid call."""
 
@@ -754,12 +761,21 @@ async def run_campaign(
     config = config.normalized()
     validate_campaign_profile(config, max_concurrent=max_concurrent, shard_size=shard_size)
     validate_contract(root=config.repository_root)
-    task_ids = catalog_task_ids(config.repository_root)
+    catalog = catalog_task_ids(config.repository_root)
+    task_ids = catalog if selected_task_ids is None else tuple(selected_task_ids)
+    if not task_ids or len(task_ids) != len(set(task_ids)):
+        raise ValueError("campaign task selection must be nonempty and unique")
+    selected = set(task_ids)
+    if any(task_id not in set(catalog) for task_id in task_ids):
+        raise ValueError("campaign task selection contains an unknown task ID")
+    if tuple(task_id for task_id in catalog if task_id in selected) != task_ids:
+        raise ValueError("campaign task selection must preserve deterministic catalog order")
     identity = _campaign_identity(
         config,
         task_ids,
         shard_size,
         artifact_fingerprints=artifact_fingerprints,
+        job_name=job_name,
     )
 
     state = CampaignState(state_dir)
@@ -779,8 +795,8 @@ async def run_campaign(
         if not pending:
             continue
         taskset = make_taskset(server=config.server, selected=pending, root=config.repository_root)
-        job = await job_factory(CAMPAIGN_JOB_NAME, taskset_id=taskset.api_id)
-        if job.name != CAMPAIGN_JOB_NAME:
+        job = await job_factory(job_name, taskset_id=taskset.api_id)
+        if job.name != job_name:
             raise CampaignBlocked("HUD Job factory changed the required campaign job name")
         await job_receipt_verifier(job, client=client)
         attempt_number = state.start_attempt(shard["index"], job=job, task_ids=pending, max_concurrent=max_concurrent)
@@ -812,7 +828,7 @@ async def run_campaign(
             config,
             max_concurrent=max_concurrent,
             executor=journaled_executor,
-            job_name=CAMPAIGN_JOB_NAME,
+            job_name=job_name,
             job=job,
             prelaunch_verifier=prelaunch_verifier,
         )
@@ -846,7 +862,7 @@ async def run_campaign(
     completed = sum(len(shard["completed_task_ids"]) for shard in state.payload["shards"])
     summary = {
         "schema_version": CAMPAIGN_SCHEMA_VERSION,
-        "job_name": CAMPAIGN_JOB_NAME,
+        "job_name": job_name,
         "task_count": total,
         "completed_task_count": completed,
         "complete": completed == total,
