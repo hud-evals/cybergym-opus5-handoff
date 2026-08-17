@@ -11,6 +11,7 @@ contract while changing only the provider transport.
 from __future__ import annotations
 
 import functools
+import ipaddress
 import os
 import re
 import threading
@@ -20,7 +21,11 @@ from typing import Any
 TARGET_MODELS = frozenset({"gpt-5.6-sol", "openai/gpt-5.6-sol"})
 API_MODEL = "gpt-5.6-sol"
 EFFORT_ENV = "CYBERGYM_REASONING_EFFORT"
+RUNTIME_NETWORK_ENV = "CYBERGYM_RUNTIME_NETWORK"
 SUPPORTED_EFFORT = "xhigh"
+SUPPORTED_RUNTIME_NETWORK = "cybergym-no-internet"
+SUPPORTED_RUNTIME_SUBNET = ipaddress.ip_network("172.30.0.0/24")
+SUPPORTED_RUNTIME_GATEWAY = ipaddress.ip_address("172.30.0.1")
 SERVED_MODEL_PATTERN = re.compile(r"^gpt-5\.6-sol(?:-\d{4}-\d{2}-\d{2})?$")
 STANDARD_INPUT_USD_PER_TOKEN = 5.0 / 1_000_000
 STANDARD_CACHED_INPUT_USD_PER_TOKEN = 0.5 / 1_000_000
@@ -642,12 +647,64 @@ def _patch_async_llm_instances(async_llm: Any, effort: str) -> None:
     cls._call_acompletion = patched_call
 
 
+def _patch_docker_runtime(docker_runtime: Any, network: str) -> None:
+    """Connect the host controller directly to its internal-only container.
+
+    Docker does not publish runtime ports back to localhost for an internal
+    bridge. The Linux host can still reach the container address directly.
+    Bind only the exact reviewed network/subnet and reject any extra network
+    attachment instead of falling back to the public Docker-default route.
+    """
+
+    if network != SUPPORTED_RUNTIME_NETWORK:
+        raise RuntimeError(f"unsupported CyberGym runtime network: {network!r}")
+    cls = docker_runtime.DockerRuntime
+    original = cls._init_container
+    if getattr(original, "_cybergym_private_runtime_network", False):
+        return
+
+    @functools.wraps(original)
+    def patched(self: Any, *args: Any, **kwargs: Any) -> Any:
+        result = original(self, *args, **kwargs)
+        runtime_kwargs = self.config.sandbox.docker_runtime_kwargs
+        if not isinstance(runtime_kwargs, Mapping) or runtime_kwargs.get("network") != network:
+            raise RuntimeError("OpenHands runtime did not retain the reviewed private-only network")
+        self.container.reload()
+        attachments = (self.container.attrs.get("NetworkSettings") or {}).get("Networks") or {}
+        if set(attachments) != {network}:
+            raise RuntimeError(f"OpenHands runtime has unexpected Docker network attachments: {sorted(attachments)}")
+        details = attachments.get(network)
+        address_text = details.get("IPAddress") if isinstance(details, Mapping) else None
+        try:
+            address = ipaddress.ip_address(address_text)
+        except ValueError as exc:
+            raise RuntimeError("OpenHands runtime has no valid private-network address") from exc
+        if address not in SUPPORTED_RUNTIME_SUBNET or address == SUPPORTED_RUNTIME_GATEWAY:
+            raise RuntimeError(f"OpenHands runtime address is outside the reviewed private subnet: {address}")
+        if not isinstance(self._container_port, int) or not 1 <= self._container_port <= 65535:
+            raise RuntimeError("OpenHands runtime action-server port is invalid")
+        self.api_url = f"http://{address}:{self._container_port}"
+        return result
+
+    patched._cybergym_private_runtime_network = True
+    cls._init_container = patched
+
+
 def install() -> bool:
     """Install the exact Responses adapters; return whether activated."""
 
     effort = os.environ.get(EFFORT_ENV)
-    if effort is None:
+    runtime_network = os.environ.get(RUNTIME_NETWORK_ENV)
+    if effort is None and runtime_network is None:
         return False
+    if runtime_network != SUPPORTED_RUNTIME_NETWORK:
+        raise RuntimeError(f"{RUNTIME_NETWORK_ENV} must be {SUPPORTED_RUNTIME_NETWORK!r}; got {runtime_network!r}")
+
+    from openhands.runtime.impl.docker import docker_runtime
+
+    _patch_docker_runtime(docker_runtime, runtime_network)
+    if effort is None:
+        return True
     if effort != SUPPORTED_EFFORT:
         raise RuntimeError(f"{EFFORT_ENV} must be {SUPPORTED_EFFORT!r}; got {effort!r}")
 

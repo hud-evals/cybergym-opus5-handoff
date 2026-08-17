@@ -324,10 +324,12 @@ class _OpenHandsSubprocessProxy:
         if len(normalized) < 5 or tuple(normalized[1:5]) != marker:
             raise RuntimeError(f"refusing to inject reasoning shim into unexpected command: {normalized!r}")
         child_env = dict(kwargs.get("env") or {})
-        if self._reasoning_effort:
+        if self._reasoning_effort or self._runtime_kwargs is not None:
             child_env["PYTHONPATH"] = str(self._shim_dir)
+        if self._reasoning_effort:
             child_env["CYBERGYM_REASONING_EFFORT"] = self._reasoning_effort
         if self._runtime_kwargs is not None:
+            child_env["CYBERGYM_RUNTIME_NETWORK"] = str(self._runtime_kwargs["network"])
             try:
                 config_index = normalized.index("--config-file") + 1
                 config_path = Path(normalized[config_index])

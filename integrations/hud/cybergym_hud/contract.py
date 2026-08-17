@@ -151,6 +151,7 @@ def validate_contract(
         "agent_public_ipv4_egress": False,
         "agent_public_dns": False,
         "host_model_and_hud_egress": True,
+        "controller_runtime_transport": "host_to_exact_internal_container_ip",
         "preflight": "fresh_runtime_container_proves_controller_reachable_and_public_ip_dns_blocked",
     }:
         raise ValueError("runtime network isolation policy drifted")
@@ -206,9 +207,9 @@ def validate_contract(
         "transport_omits": ["temperature", "top_p", "stop"],
         "protected_upstream_sources_modified": False,
         "shim_sha256": {
-            "openhands_shim/sitecustomize.py": "d09cf474fb16711f7d065565d641f50bf46026d4d18f18607fe9e29dc41e5b78",
+            "openhands_shim/sitecustomize.py": "d7e2fa09d7d7d67731f95d338e91ec346e5eb6067afaebfa0db8bddcd10c6bfd",
             "openhands_shim/_cybergym_openhands_compat.py": (
-                "f0d38cc047710a7fa41d3123db4fcb69f723d10d9d32dead3429700bcb82e864"
+                "59cdc1bdcb64802355eff14dd95e093401fee8158b7bf022a1cfebce25e558e3"
             ),
         },
     }:

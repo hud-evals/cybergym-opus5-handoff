@@ -254,6 +254,7 @@ def test_openhands_subprocess_proxy_injects_only_the_exact_child(tmp_path: Path)
         "LLM_API_KEY": "secret",
         "PYTHONPATH": str(tmp_path / "shim"),
         "CYBERGYM_REASONING_EFFORT": "xhigh",
+        "CYBERGYM_RUNTIME_NETWORK": "cybergym-no-internet",
     }
     rendered = config_path.read_text(encoding="utf-8")
     assert "nano_cpus = 4000000000" in rendered

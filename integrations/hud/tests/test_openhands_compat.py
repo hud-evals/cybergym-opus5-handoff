@@ -758,6 +758,30 @@ def test_site_install_patches_pinned_openhands_aliases_and_model_capabilities(
         async def _call_acompletion(self, *_args, **_kwargs):
             return await acompletion()
 
+    class FakeContainer:
+        attrs = {
+            "NetworkSettings": {
+                "Networks": {
+                    "cybergym-no-internet": {"IPAddress": "172.30.0.9"},
+                }
+            }
+        }
+
+        def reload(self):
+            return None
+
+    class FakeDockerRuntime:
+        def __init__(self):
+            self.config = SimpleNamespace(
+                sandbox=SimpleNamespace(docker_runtime_kwargs={"auto_remove": True, "network": "cybergym-no-internet"})
+            )
+            self.container = FakeContainer()
+            self._container_port = 12345
+            self.api_url = "http://localhost:12345"
+
+        def _init_container(self):
+            return "started"
+
     litellm = ModuleType("litellm")
     litellm.completion = completion
     litellm.acompletion = acompletion
@@ -770,20 +794,34 @@ def test_site_install_patches_pinned_openhands_aliases_and_model_capabilities(
     async_module = ModuleType("openhands.llm.async_llm")
     async_module.litellm_acompletion = acompletion
     async_module.AsyncLLM = FakeAsyncLLM
+    docker_runtime_module = ModuleType("openhands.runtime.impl.docker.docker_runtime")
+    docker_runtime_module.DockerRuntime = FakeDockerRuntime
+    docker_package = ModuleType("openhands.runtime.impl.docker")
+    docker_package.docker_runtime = docker_runtime_module
+    runtime_impl = ModuleType("openhands.runtime.impl")
+    runtime_impl.docker = docker_package
+    runtime_package = ModuleType("openhands.runtime")
+    runtime_package.impl = runtime_impl
     package = ModuleType("openhands.llm")
     package.llm = llm_module
     package.async_llm = async_module
     openhands = ModuleType("openhands")
     openhands.llm = package
+    openhands.runtime = runtime_package
     for name, value in {
         "litellm": litellm,
         "openhands": openhands,
         "openhands.llm": package,
         "openhands.llm.llm": llm_module,
         "openhands.llm.async_llm": async_module,
+        "openhands.runtime": runtime_package,
+        "openhands.runtime.impl": runtime_impl,
+        "openhands.runtime.impl.docker": docker_package,
+        "openhands.runtime.impl.docker.docker_runtime": docker_runtime_module,
     }.items():
         monkeypatch.setitem(sys.modules, name, value)
     monkeypatch.setenv("CYBERGYM_REASONING_EFFORT", "xhigh")
+    monkeypatch.setenv("CYBERGYM_RUNTIME_NETWORK", "cybergym-no-internet")
 
     assert compat.install() is True
     # The process-global LiteLLM transports stay untouched.  Each OpenHands
@@ -829,6 +867,91 @@ def test_site_install_patches_pinned_openhands_aliases_and_model_capabilities(
         llm_module.MODELS_WITHOUT_STOP_WORDS,
     ):
         assert {"gpt-5.6-sol", "openai/gpt-5.6-sol"} <= set(values)
+    runtime = FakeDockerRuntime()
+    assert runtime._init_container() == "started"
+    assert runtime.api_url == "http://172.30.0.9:12345"
+
+
+def test_site_install_rejects_missing_private_runtime_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    compat = _load()
+    monkeypatch.setenv("CYBERGYM_REASONING_EFFORT", "xhigh")
+    monkeypatch.delenv("CYBERGYM_RUNTIME_NETWORK", raising=False)
+    with pytest.raises(RuntimeError, match="CYBERGYM_RUNTIME_NETWORK"):
+        compat.install()
+
+
+def test_private_runtime_patch_rejects_an_extra_network_attachment() -> None:
+    compat = _load()
+
+    class Runtime:
+        def __init__(self):
+            self.config = SimpleNamespace(
+                sandbox=SimpleNamespace(docker_runtime_kwargs={"network": "cybergym-no-internet"})
+            )
+            self.container = SimpleNamespace(
+                reload=lambda: None,
+                attrs={
+                    "NetworkSettings": {
+                        "Networks": {
+                            "cybergym-no-internet": {"IPAddress": "172.30.0.8"},
+                            "bridge": {"IPAddress": "172.17.0.8"},
+                        }
+                    }
+                },
+            )
+            self._container_port = 12000
+
+        def _init_container(self):
+            return None
+
+    module = SimpleNamespace(DockerRuntime=Runtime)
+    compat._patch_docker_runtime(module, "cybergym-no-internet")
+    with pytest.raises(RuntimeError, match="unexpected Docker network attachments"):
+        Runtime()._init_container()
+
+
+def test_private_runtime_patch_activates_without_reasoning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compat = _load()
+
+    class Runtime:
+        def __init__(self):
+            self.config = SimpleNamespace(
+                sandbox=SimpleNamespace(docker_runtime_kwargs={"network": "cybergym-no-internet"})
+            )
+            self.container = SimpleNamespace(
+                reload=lambda: None,
+                attrs={"NetworkSettings": {"Networks": {"cybergym-no-internet": {"IPAddress": "172.30.0.7"}}}},
+            )
+            self._container_port = 14000
+            self.api_url = "http://localhost:14000"
+
+        def _init_container(self):
+            return None
+
+    docker_runtime = ModuleType("openhands.runtime.impl.docker.docker_runtime")
+    docker_runtime.DockerRuntime = Runtime
+    docker_package = ModuleType("openhands.runtime.impl.docker")
+    docker_package.docker_runtime = docker_runtime
+    runtime_impl = ModuleType("openhands.runtime.impl")
+    runtime_impl.docker = docker_package
+    runtime_package = ModuleType("openhands.runtime")
+    runtime_package.impl = runtime_impl
+    for name, value in {
+        "openhands.runtime": runtime_package,
+        "openhands.runtime.impl": runtime_impl,
+        "openhands.runtime.impl.docker": docker_package,
+        "openhands.runtime.impl.docker.docker_runtime": docker_runtime,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, value)
+    monkeypatch.delenv("CYBERGYM_REASONING_EFFORT", raising=False)
+    monkeypatch.setenv("CYBERGYM_RUNTIME_NETWORK", "cybergym-no-internet")
+
+    assert compat.install() is True
+    runtime = Runtime()
+    runtime._init_container()
+    assert runtime.api_url == "http://172.30.0.7:14000"
 
 
 def test_site_install_is_inert_without_explicit_effort(monkeypatch: pytest.MonkeyPatch) -> None:
