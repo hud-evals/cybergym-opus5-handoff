@@ -219,7 +219,7 @@ def test_claude_opus_5_direct_profile_is_receipted(config: NativeOpenHandsConfig
     assert profile.reasoning_transport == "none"
     assert profile.response_storage == "none"
     assert profile.response_continuation == "none"
-    assert profile.omitted_sampling_parameters == ()
+    assert profile.omitted_sampling_parameters == ("temperature",)
 
 
 def test_runtime_limits_are_coherent_and_receipted(config: NativeOpenHandsConfig) -> None:
@@ -284,6 +284,7 @@ def test_openhands_subprocess_proxy_injects_only_the_exact_child(tmp_path: Path)
     proxy = _OpenHandsSubprocessProxy(
         Delegate(),
         shim_dir=tmp_path / "shim",
+        model="gpt-5.6-sol",
         reasoning_effort="xhigh",
         runtime_kwargs=runtime_kwargs,
     )
@@ -313,6 +314,53 @@ def test_openhands_subprocess_proxy_injects_only_the_exact_child(tmp_path: Path)
     assert config_path.stat().st_mode & 0o777 == 0o600
     with pytest.raises(RuntimeError, match="unexpected command"):
         proxy.run(["/usr/bin/poetry", "run", "python", "other.py"], env={})
+
+
+def test_subprocess_proxy_omits_only_deprecated_claude_temperature(tmp_path: Path) -> None:
+    calls = []
+
+    class Delegate:
+        TimeoutExpired = subprocess.TimeoutExpired
+
+        def run(self, command, *args, **kwargs):
+            calls.append((command, args, kwargs))
+            return "done"
+
+    proxy = _OpenHandsSubprocessProxy(
+        Delegate(),
+        shim_dir=tmp_path / "shim",
+        model="claude-opus-5",
+        reasoning_effort=None,
+        runtime_kwargs={
+            "auto_remove": True,
+            "network": "cybergym-no-internet",
+            "nano_cpus": 4_000_000_000,
+            "mem_limit": 8 * 1024**3,
+            "memswap_limit": 8 * 1024**3,
+        },
+    )
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        '[llm]\nmodel = "claude-opus-5"\ntemperature = 0.0\ntop_p = 1.0\n'
+        "[sandbox]\ndocker_runtime_kwargs = {auto_remove = true}\n",
+        encoding="utf-8",
+    )
+    command = [
+        "/usr/bin/poetry",
+        "run",
+        "python",
+        "-m",
+        "openhands.core.main",
+        "--config-file",
+        str(config_path),
+    ]
+
+    assert proxy.run(command, env={"LLM_API_KEY": "test-secret"}) == "done"
+    rendered = config_path.read_text(encoding="utf-8")
+    assert 'model = "claude-opus-5"' in rendered
+    assert "temperature" not in rendered
+    assert "top_p = 1.0" in rendered
+    assert "CYBERGYM_REASONING_EFFORT" not in calls[0][2]["env"]
 
 
 @pytest.mark.parametrize("signed_transport", [False, True])
@@ -375,6 +423,7 @@ def test_openhands_subprocess_proxy_uses_private_daytona_attachment(
     proxy = _OpenHandsSubprocessProxy(
         Delegate(),
         shim_dir=tmp_path / "shim",
+        model="gpt-5.6-sol",
         reasoning_effort="xhigh",
         execution_backend="daytona-private",
         task_id="arvo:10013",

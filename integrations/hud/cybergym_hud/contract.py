@@ -204,7 +204,7 @@ def validate_contract(
         "provider_retries": "pinned_openhands_litellm_retry_policy",
         "cost_accounting": "provider_usage_reported_by_pinned_openhands",
         "served_model_identity": "claude-opus-5_pinned_snapshot",
-        "transport_omits": ["reasoning_effort"],
+        "transport_omits": ["temperature", "reasoning_effort"],
         "protected_upstream_sources_modified": False,
         "shim_sha256": {
             "openhands_shim/sitecustomize.py": "d7e2fa09d7d7d67731f95d338e91ec346e5eb6067afaebfa0db8bddcd10c6bfd",

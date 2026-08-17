@@ -175,7 +175,11 @@ class NativeOpenHandsConfig:
             response_continuation=(
                 "per_llm_previous_response_id_exact_transcript_extensions" if self.reasoning_effort else "none"
             ),
-            omitted_sampling_parameters=("temperature", "top_p", "stop") if self.reasoning_effort else (),
+            omitted_sampling_parameters=(
+                ("temperature", "top_p", "stop")
+                if self.reasoning_effort
+                else (("temperature",) if self.model == "claude-opus-5" else ())
+            ),
             max_iter=self.max_iter,
             timeout_seconds=self.timeout,
             max_output_tokens=self.max_output_tokens,
@@ -359,6 +363,42 @@ def _controller_termination(
     return "error"
 
 
+def _omit_deprecated_claude_sampling(config_path: Path) -> None:
+    """Remove only Opus 5's deprecated temperature before provider spend."""
+
+    config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    llm = config.get("llm")
+    if not isinstance(llm, dict) or llm.get("model") != "claude-opus-5":
+        raise RuntimeError("OpenHands config is not the pinned Claude Opus 5 arm")
+    temperature = llm.pop("temperature", None)
+    if isinstance(temperature, bool) or not isinstance(temperature, int | float) or float(temperature) != 0.0:
+        raise RuntimeError("OpenHands Claude temperature default drifted")
+    encoded = tomli_w.dumps(config).encode()
+    temporary = config_path.with_name(f".{config_path.name}.claude.tmp")
+    descriptor = os.open(
+        temporary,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        os.fchmod(descriptor, 0o600)
+        remaining = memoryview(encoded)
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if written <= 0:
+                raise OSError("short write while enforcing Claude sampling parameters")
+            remaining = remaining[written:]
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    os.replace(temporary, config_path)
+    directory = os.open(config_path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
 class _OpenHandsSubprocessProxy:
     """Inject compatibility only into the exact pinned OpenHands child."""
 
@@ -367,6 +407,7 @@ class _OpenHandsSubprocessProxy:
         delegate: ModuleType,
         *,
         shim_dir: Path,
+        model: str,
         reasoning_effort: str | None,
         runtime_kwargs: dict[str, Any] | None = None,
         execution_backend: Literal["native-docker", "daytona-private"] = "native-docker",
@@ -377,6 +418,7 @@ class _OpenHandsSubprocessProxy:
     ) -> None:
         self._delegate = delegate
         self._shim_dir = shim_dir
+        self._model = model
         self._reasoning_effort = reasoning_effort
         self._runtime_kwargs = runtime_kwargs
         self._execution_backend = execution_backend
@@ -397,6 +439,12 @@ class _OpenHandsSubprocessProxy:
             command = list(command)
             command[4] = "cybergym_openhands_launcher"
         child_env = dict(kwargs.get("env") or {})
+        if self._model == "claude-opus-5":
+            try:
+                config_index = normalized.index("--config-file") + 1
+                _omit_deprecated_claude_sampling(Path(normalized[config_index]))
+            except (OSError, ValueError, tomllib.TOMLDecodeError) as exc:
+                raise RuntimeError("could not enforce the Claude Opus 5 sampling contract") from exc
         if os.environ.get("CG_DAYTONA_ACTION_TRANSPORT") == "signed-preview":
             openhands_venv = Path(os.environ.get("OPENHANDS_VENV", ""))
             if (
@@ -625,6 +673,7 @@ def execute_upstream_openhands(
         upstream.subprocess = _OpenHandsSubprocessProxy(
             original_subprocess,
             shim_dir=shim_dir,
+            model=config.model,
             reasoning_effort=config.reasoning_effort,
             runtime_kwargs=runtime_kwargs,
             execution_backend=config.execution_backend,
