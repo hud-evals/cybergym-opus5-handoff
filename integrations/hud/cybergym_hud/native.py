@@ -361,6 +361,9 @@ class _OpenHandsSubprocessProxy:
         marker = ("run", "python", "-m", "openhands.core.main")
         if len(normalized) < 5 or tuple(normalized[1:5]) != marker:
             raise RuntimeError(f"refusing to inject reasoning shim into unexpected command: {normalized!r}")
+        if os.environ.get("CG_DAYTONA_ACTION_TRANSPORT") == "signed-preview":
+            command = list(command)
+            command[4] = "cybergym_openhands_launcher"
         child_env = dict(kwargs.get("env") or {})
         if self._reasoning_effort or self._runtime_kwargs is not None or self._execution_backend == "daytona-private":
             child_env["PYTHONPATH"] = str(self._shim_dir)

@@ -284,9 +284,11 @@ def test_openhands_subprocess_proxy_injects_only_the_exact_child(tmp_path: Path)
         proxy.run(["/usr/bin/poetry", "run", "python", "other.py"], env={})
 
 
+@pytest.mark.parametrize("signed_transport", [False, True])
 def test_openhands_subprocess_proxy_uses_private_daytona_attachment(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    signed_transport: bool,
 ) -> None:
     calls = []
     workspace = tmp_path / "workspace"
@@ -330,6 +332,10 @@ def test_openhands_subprocess_proxy_uses_private_daytona_attachment(
 
     monkeypatch.setattr("cybergym_hud.daytona_lane.configure_attached_runtime", fake_configure)
     monkeypatch.setattr("cybergym_hud.daytona_lane.prepared_daytona_runtime", fake_runtime)
+    if signed_transport:
+        monkeypatch.setenv("CG_DAYTONA_ACTION_TRANSPORT", "signed-preview")
+    else:
+        monkeypatch.delenv("CG_DAYTONA_ACTION_TRANSPORT", raising=False)
     proxy = _OpenHandsSubprocessProxy(
         Delegate(),
         shim_dir=tmp_path / "shim",
@@ -360,6 +366,7 @@ def test_openhands_subprocess_proxy_uses_private_daytona_attachment(
         == "done"
     )
     assert configured == [True]
+    assert calls[0][0][4] == ("cybergym_openhands_launcher" if signed_transport else "openhands.core.main")
     assert calls[0][2]["env"] == {
         "LLM_API_KEY": "secret",
         "LOG_DIR": str(tmp_path / "private/logs"),
