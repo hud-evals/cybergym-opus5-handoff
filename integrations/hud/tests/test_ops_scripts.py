@@ -16,6 +16,8 @@ SCRIPTS = tuple(
         "configure-secrets.sh",
         "install-service.sh",
         "install-campaign-service.sh",
+        "daytona-preflight.sh",
+        "daytona-campaign.sh",
         "server.sh",
         "cybergym-ops",
     )
@@ -56,15 +58,16 @@ def test_preflight_contains_no_native_model_runner() -> None:
     assert 'detail == "Not found"' not in text
     assert 'headers={"X-API-Key": os.environ["CYBERGYM_API_KEY"]}' in text
     assert "hud models list --json" in text
-    assert "https://api.openai.com/v1/models/" in text
+    assert "https://api.anthropic.com/v1/models/" in text
+    assert '"x-api-key": os.environ["ANTHROPIC_API_KEY"]' in text
     assert "SERVER_MODE=${CG_SERVER_MODE:-images}" in text
     assert "cybergym/oss-fuzz-base-runner:latest" in text
     assert 'IFS= read -r RUNNER_IMAGE <"$BINARY_TASK/$mode/runner"' in text
     assert "git-lfs.github.com/spec/v1" in text
     assert 'tar -tzf "$TASK_DATA/repo-vul.tar.gz"' in text
     assert '"$SCRIPT_DIR/runtime-image.sh" verify' in text
-    assert '"$SCRIPT_DIR/verify-reasoning-transport.py"' in text
-    assert "CG_REASONING_EFFORT=xhigh" in text
+    assert "pinned OpenHands Claude Opus 5 provider construction" in text
+    assert "claude-opus-5 runs require empty CG_REASONING_EFFORT" in text
 
 
 def test_reasoning_transport_proof_activates_the_private_runtime_patch() -> None:
@@ -187,9 +190,8 @@ def test_campaign_profile_resume_and_secret_boundaries_are_explicit() -> None:
     preflight = (OPS / "campaign-preflight.sh").read_text(encoding="utf-8")
     dispatcher = (OPS / "cybergym-ops").read_text(encoding="utf-8")
     for expected in (
-        "gpt-5.6-sol",
-        "xhigh",
-        "cybergym-gpt5.6-sol-no-internet-v1",
+        "claude-opus-5",
+        "cybergym-claude-opus-5-no-internet-v1",
         "--confirm-paid-all",
         "--max-concurrent",
         "--shard-size",
@@ -201,13 +203,13 @@ def test_campaign_profile_resume_and_secret_boundaries_are_explicit() -> None:
     assert 'set -- "$UV_BIN" run --frozen --no-sync' in campaign
     assert 'set -- "$UV_BIN" run --frozen --no-sync' in preflight
     assert '"$UV_BIN" run --frozen --no-sync' in (OPS / "preflight.sh").read_text(encoding="utf-8")
-    assert "OPENAI_API_KEY" not in campaign
+    assert "ANTHROPIC_API_KEY" not in campaign
     assert "HUD_API_KEY" not in campaign
     assert "CYBERGYM_API_KEY" not in campaign
     assert "cybergym-hud-preflight-catalog" in preflight
     assert "full-corpus-preflight.json" in preflight
     assert "cybergym-no-internet" in campaign
-    assert "campaign-gpt56-sol-200-no-internet-v1" in preflight
+    assert "campaign-claude-opus-5-200-no-internet-v1" in preflight
     assert "campaign-preflight" in dispatcher
     assert 'exec "$SCRIPT_DIR/campaign.sh"' in dispatcher
 
@@ -241,8 +243,8 @@ def test_smoke_is_exactly_one_task_and_one_slot() -> None:
     assert "--max-concurrent 1" in text
     assert "--max-iter 10" in text
     assert '--job-name "$JOB_NAME"' in text
-    assert '--reasoning-effort "$REASONING_EFFORT"' in text
-    assert "cybergym-gpt5.6-sol-no-internet-v1" in text
+    assert "--reasoning-effort" not in text
+    assert "cybergym-claude-opus-5-no-internet-v1" in text
     assert '--runtime-network "$RUNTIME_NETWORK"' in text
 
 
@@ -261,9 +263,9 @@ def test_committed_env_template_has_names_but_no_secret_values() -> None:
         assert secret in assignments
         assert assignments[secret] == ""
     assert assignments["CG_SMOKE_TASK_ID"] == "arvo:10400"
-    assert assignments["CG_MODEL"] == "gpt-5.6-sol"
-    assert assignments["CG_REASONING_EFFORT"] == "xhigh"
-    assert assignments["CG_JOB_NAME"] == "cybergym-gpt5.6-sol-no-internet-v1"
+    assert assignments["CG_MODEL"] == "claude-opus-5"
+    assert assignments["CG_REASONING_EFFORT"] == ""
+    assert assignments["CG_JOB_NAME"] == "cybergym-claude-opus-5-no-internet-v1"
     assert assignments["CG_RUNTIME_NETWORK"] == "cybergym-no-internet"
     assert assignments["CG_SERVER_URL"] == "http://172.30.0.1:8666"
     assert assignments["CG_SERVER_MODE"] == "images"
@@ -285,12 +287,13 @@ def test_secret_entry_and_dispatch_never_put_values_in_argv() -> None:
     assert "secrets.token_urlsafe" in configure
     assert "/etc/cybergym/server.env" in configure
     assert "/etc/cybergym/runner.env" in configure
+    assert "/etc/cybergym/daytona.env" in configure
     assert '"CG_DATA_DIR": "/srv/cybergym-runtime/task-data/cybergym-data/data"' in configure
     assert '"CG_DATA_PROVENANCE": "/srv/cybergym-runtime/task-data/provenance/PROVENANCE.json"' in configure
     assert '"CG_SERVER_DEPLOYMENT_SEAL": "/etc/cybergym/server-attestation.json"' in configure
     assert '"CG_CAMPAIGN_MAX_CONCURRENT": "4"' in configure
     assert "HUD_API_KEY=" not in configure
-    assert "OPENAI_API_KEY=" not in configure
+    assert "ANTHROPIC_API_KEY=" not in configure
     assert "try-restart" not in configure
     assert "set +x" in dispatcher
     assert 'exec "$SCRIPT_DIR/smoke.sh"' in dispatcher
@@ -312,13 +315,13 @@ def test_private_server_is_unmasked_and_internal_network_only() -> None:
     assert "LimitCORE=0" in installer
 
 
-def test_campaign_service_is_preflighted_durable_and_does_not_error_loop() -> None:
+def test_campaign_service_is_preflighted_durable_and_retries_exact_error_rows() -> None:
     installer = (OPS / "install-campaign-service.sh").read_text(encoding="utf-8")
     assert "campaign-preflight --max-concurrent 4" not in installer
     assert "campaign.sh` performs the authoritative no-spend preflight" in installer
-    assert "--confirm-paid-all --max-concurrent 4 --shard-size 12" in installer
-    assert "Restart=on-abnormal" in installer
-    assert "Restart=on-failure" not in installer
+    assert "--confirm-paid-all --continue-after-errors --max-concurrent 4 --shard-size 12" in installer
+    assert "Restart=on-failure" in installer
+    assert "StartLimitIntervalSec=0" in installer
     assert "cybergym-server.service" in installer
     assert "LimitCORE=0" in installer
     assert "systemctl enable cybergym-campaign.service" in installer

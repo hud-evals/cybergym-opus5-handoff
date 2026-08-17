@@ -44,9 +44,9 @@ from .taskset import make_taskset
 from .taskset import task_ids as catalog_task_ids
 
 CAMPAIGN_SCHEMA_VERSION = "1"
-CAMPAIGN_JOB_NAME = "cybergym-gpt5.6-sol-no-internet-v1"
-CAMPAIGN_MODEL = "gpt-5.6-sol"
-CAMPAIGN_REASONING_EFFORT = "xhigh"
+CAMPAIGN_JOB_NAME = "cybergym-claude-opus-5-no-internet-v1"
+CAMPAIGN_MODEL = "claude-opus-5"
+CAMPAIGN_REASONING_EFFORT = None
 CAMPAIGN_MAX_ITER = 200
 CAMPAIGN_TIMEOUT_SECONDS = 3600
 CAMPAIGN_MAX_CONCURRENT = 6
@@ -949,7 +949,7 @@ def main() -> None:
     )
     config.log_dir.mkdir(parents=True, exist_ok=True)
     config.tmp_dir.mkdir(parents=True, exist_ok=True)
-    state_dir = results_dir / "campaign-gpt56-sol-200-no-internet-v1"
+    state_dir = results_dir / "campaign-claude-opus-5-200-no-internet-v1"
     try:
         with campaign_lock(state_dir):
             artifact_fingerprints = load_preflight_fingerprints(

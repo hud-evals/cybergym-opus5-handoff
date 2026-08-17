@@ -14,6 +14,14 @@ CyberGym is a large-scale, high-quality cybersecurity evaluation framework desig
 > [!WARNING]
 > **Deploy everything locally. Do not expose any part of CyberGym to the public internet.**
 
+## Claude Opus 5 Nix/Daytona handoff
+
+On branch `agent/cybergym-daytona-anthropic`, use the concise reproducible
+operator flow in [`integrations/hud/ANTHROPIC_NIX.md`](integrations/hud/ANTHROPIC_NIX.md).
+It pins direct `claude-opus-5`, keeps secrets outside Git, preserves the
+no-public-egress task runtime, and exposes setup/preflight/smoke/campaign apps
+through the locked Nix flake.
+
 ## Installation
 Require python and docker environment.
 

@@ -57,11 +57,15 @@ def validate_daytona_contract() -> dict[str, Any]:
         payload.get("schema_version") != "1"
         or payload.get("canonical_native_result") is not False
         or payload.get("merge_with_native_campaign") is not False
-        or payload.get("job_name") != "cybergym-gpt5.6-sol-2"
+        or payload.get("job_name") != "cybergym-claude-opus-5-2"
+        or payload.get("agent", {}).get("model") != "claude-opus-5"
+        or payload.get("agent", {}).get("reasoning_effort") is not None
         or payload.get("runtime", {}).get("image") != DAYTONA_IMAGE
         or payload.get("runtime", {}).get("max_concurrent") != 60
         or payload.get("runtime", {}).get("network")
         != "host_cidr_allowlist_plus_tls_resolve_before_workspace_stage_and_action_server"
+        or payload.get("accounting", {}).get("retry_policy")
+        != "terminal_error_rows_remain_pending_for_exact_automatic_retry"
     ):
         raise RuntimeError("CyberGym Daytona fidelity contract drifted")
     return payload

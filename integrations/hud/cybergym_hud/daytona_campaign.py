@@ -33,7 +33,8 @@ from .native import (
 )
 from .taskset import task_ids as catalog_task_ids
 
-JOB_NAME = "cybergym-gpt5.6-sol-2"
+JOB_NAME = "cybergym-claude-opus-5-2"
+MODEL = "claude-opus-5"
 MAX_PRIVATE_FILE_BYTES = 16 * 1024 * 1024
 
 
@@ -193,7 +194,7 @@ def _require_daytona_preflight(path: Path) -> None:
 
 def _require_credentials() -> None:
     missing = [
-        name for name in ("HUD_API_KEY", "OPENAI_API_KEY", "DAYTONA_API_KEY") if not os.environ.get(name, "").strip()
+        name for name in ("HUD_API_KEY", "ANTHROPIC_API_KEY", "DAYTONA_API_KEY") if not os.environ.get(name, "").strip()
     ]
     if missing:
         raise CampaignBlocked(f"Daytona campaign is missing required credential variables: {missing}")
@@ -224,17 +225,14 @@ def _require_openhands_bridge(repository_root: Path) -> None:
             "POETRY_VIRTUALENVS_PATH",
         }
     }
-    allowed.update(
-        {
-            "PYTHONPATH": str(shim),
-            "CYBERGYM_REASONING_EFFORT": "xhigh",
-            "CYBERGYM_DAYTONA_ACTION_URL": "http://127.0.0.1:43210",
-        }
-    )
+    allowed.update({"PYTHONPATH": str(shim), "CYBERGYM_DAYTONA_ACTION_URL": "http://127.0.0.1:43210"})
     code = (
-        "from openhands.llm import async_llm,llm;"
-        "assert getattr(llm.LLM.__init__,'_cybergym_gpt56_xhigh',False);"
-        "assert getattr(async_llm.AsyncLLM._call_acompletion,'_cybergym_gpt56_xhigh',False)"
+        "from openhands.core.config import LLMConfig;"
+        "from openhands.llm.llm import LLM;"
+        "config=LLMConfig(model='claude-opus-5',api_key='offline-preflight-key');"
+        "llm=LLM(config=config);"
+        "assert llm.config.model=='claude-opus-5';"
+        "assert llm.config.api_key.get_secret_value()=='offline-preflight-key'"
     )
     result = subprocess.run(  # noqa: S603 - executable is resolved from a fixed operator-controlled path
         [poetry, "run", "python", "-c", code],
@@ -245,7 +243,7 @@ def _require_openhands_bridge(repository_root: Path) -> None:
         timeout=60,
     )
     if result.returncode != 0:
-        raise CampaignBlocked("pinned OpenHands GPT-5.6 bridge probe failed without a model call")
+        raise CampaignBlocked("pinned OpenHands Claude Opus 5 provider probe failed without a model call")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -301,8 +299,8 @@ def main() -> None:
         repository_root=root,
         data_dir=args.data_dir,
         server=args.server,
-        model="gpt-5.6-sol",
-        reasoning_effort="xhigh",
+        model=MODEL,
+        reasoning_effort=None,
         log_dir=results_dir / "logs",
         tmp_dir=results_dir / "tmp",
         max_iter=200,

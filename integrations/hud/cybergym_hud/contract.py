@@ -191,20 +191,20 @@ def validate_contract(
         raise ValueError("native batch scheduling must remain a rolling HUD semaphore capped at 15")
     modern_model = runtime["modern_model_profile"]
     if modern_model != {
-        "label": "upstream-openhands-0.33-gpt-5.6-sol-xhigh-transport-compatibility",
-        "model": "gpt-5.6-sol",
-        "reasoning_effort": "xhigh",
-        "endpoint": "openai_responses",
-        "injection": "integration_owned_sitecustomize_per_llm_responses_bridge",
+        "label": "upstream-openhands-0.33-claude-opus-5-direct-anthropic",
+        "model": "claude-opus-5",
+        "reasoning_effort": None,
+        "endpoint": "anthropic_messages",
+        "injection": "pinned_upstream_native_litellm_anthropic_provider",
         "native_function_calling_enabled": True,
-        "response_storage": True,
-        "state_isolation": "one_responses_chain_per_openhands_llm_instance",
-        "continuation": "previous_response_id_only_for_exact_tool_or_user_transcript_extension",
-        "history_drift": "restart_from_complete_current_openhands_visible_history",
-        "provider_retries": "openai_sdk_two_beneath_pinned_openhands_retry_policy_including_max_output_incomplete",
-        "cost_accounting": "fixed_2026_08_13_standard_sol_rates_with_long_context_multiplier",
-        "served_model_identity": "gpt-5.6-sol_or_dated_snapshot",
-        "transport_omits": ["temperature", "top_p", "stop"],
+        "response_storage": False,
+        "state_isolation": "stateless_anthropic_request_per_openhands_turn",
+        "continuation": "complete_current_openhands_visible_history_each_request",
+        "history_drift": "not_applicable_no_provider_response_chain",
+        "provider_retries": "pinned_openhands_litellm_retry_policy",
+        "cost_accounting": "provider_usage_reported_by_pinned_openhands",
+        "served_model_identity": "claude-opus-5_pinned_snapshot",
+        "transport_omits": ["reasoning_effort"],
         "protected_upstream_sources_modified": False,
         "shim_sha256": {
             "openhands_shim/sitecustomize.py": "d7e2fa09d7d7d67731f95d338e91ec346e5eb6067afaebfa0db8bddcd10c6bfd",
@@ -240,11 +240,11 @@ def validate_contract(
     }:
         raise ValueError("upstream grader server profiles drifted")
     if runtime["paid_campaign"] != {
-        "model": "gpt-5.6-sol",
-        "reasoning_effort": "xhigh",
+        "model": "claude-opus-5",
+        "reasoning_effort": None,
         "max_iterations": 200,
         "timeout_seconds": 3600,
-        "job_name": "cybergym-gpt5.6-sol-no-internet-v1",
+        "job_name": "cybergym-claude-opus-5-no-internet-v1",
         "rolling_max_concurrent": 6,
         "default_shard_size": 12,
         "source_repository": "sunblaze-ucb/cybergym",
@@ -261,8 +261,8 @@ def validate_contract(
         "restart_policy": "durable_launch_journal_plus_remote_hud_receipt_reconciliation",
     }:
         raise ValueError("paid campaign profile drifted")
-    if runtime["resume"] or runtime["retries"] != 0:
-        raise ValueError("resume and retry are outside this profile")
+    if runtime["resume"] is not True or runtime["retries"] != "terminal_error_rows_only_after_terminal_remote_receipt":
+        raise ValueError("Anthropic resume and exact retry contract drifted")
     if scoring["primary_metric"] != "paper_era_agent_wide_any_of":
         raise ValueError("this native profile reports the paper-era agent-wide any-of metric")
     if scoring["records_scope"] != "all_records_for_fresh_agent_id":

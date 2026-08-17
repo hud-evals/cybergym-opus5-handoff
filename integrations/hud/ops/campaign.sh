@@ -12,9 +12,9 @@ DATA_DIR=${CG_DATA_DIR:-}
 SERVER_URL=${CG_SERVER_URL:-}
 RESULTS_DIR=${CG_RESULTS_DIR:-}
 SERVER_MODE=${CG_SERVER_MODE:-images}
-MODEL=${CG_MODEL:-gpt-5.6-sol}
-REASONING_EFFORT=${CG_REASONING_EFFORT:-xhigh}
-JOB_NAME=${CG_JOB_NAME:-cybergym-gpt5.6-sol-no-internet-v1}
+MODEL=${CG_MODEL:-claude-opus-5}
+REASONING_EFFORT=${CG_REASONING_EFFORT-}
+JOB_NAME=${CG_JOB_NAME:-cybergym-claude-opus-5-no-internet-v1}
 RUNTIME_NETWORK=${CG_RUNTIME_NETWORK:-}
 MAX_CONCURRENT=${CG_CAMPAIGN_MAX_CONCURRENT:-1}
 SHARD_SIZE=${CG_CAMPAIGN_SHARD_SIZE:-12}
@@ -32,8 +32,8 @@ Options:
   --continue-after-errors   Skip already-paid error traces after operator review
   --repository-root PATH
 
-The run profile is fixed to gpt-5.6-sol/xhigh, 200 iterations, 3600 seconds,
-and HUD Job name cybergym-gpt5.6-sol-no-internet-v1.
+The run profile is fixed to direct claude-opus-5, 200 iterations, 3600
+seconds, and HUD Job name cybergym-claude-opus-5-no-internet-v1.
 EOF
 }
 
@@ -71,13 +71,13 @@ done
 [ -n "$DATA_DIR" ] || die "CG_DATA_DIR is required"
 [ -n "$SERVER_URL" ] || die "CG_SERVER_URL is required"
 [ -n "$RESULTS_DIR" ] || die "CG_RESULTS_DIR is required"
-[ "$MODEL" = gpt-5.6-sol ] || die "paid campaign requires CG_MODEL=gpt-5.6-sol"
-[ "$REASONING_EFFORT" = xhigh ] || die "paid campaign requires CG_REASONING_EFFORT=xhigh"
-[ "$JOB_NAME" = cybergym-gpt5.6-sol-no-internet-v1 ] \
-    || die "paid campaign requires CG_JOB_NAME=cybergym-gpt5.6-sol-no-internet-v1"
+[ "$MODEL" = claude-opus-5 ] || die "paid campaign requires CG_MODEL=claude-opus-5"
+[ -z "$REASONING_EFFORT" ] || die "paid campaign requires empty CG_REASONING_EFFORT"
+[ "$JOB_NAME" = cybergym-claude-opus-5-no-internet-v1 ] \
+    || die "paid campaign requires CG_JOB_NAME=cybergym-claude-opus-5-no-internet-v1"
 [ "$RUNTIME_NETWORK" = cybergym-no-internet ] \
     || die "paid campaign requires CG_RUNTIME_NETWORK=cybergym-no-internet"
-[ -z "${CG_MODEL_BASE_URL:-}" ] || die "paid campaign requires direct OpenAI (empty CG_MODEL_BASE_URL)"
+[ -z "${CG_MODEL_BASE_URL:-}" ] || die "paid campaign requires direct Anthropic (empty CG_MODEL_BASE_URL)"
 case "$MAX_CONCURRENT" in
     1|2|3|4|5|6) ;;
     *) die "--max-concurrent must be between 1 and 6" ;;

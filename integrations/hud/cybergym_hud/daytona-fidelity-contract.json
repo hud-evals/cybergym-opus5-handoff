@@ -1,15 +1,15 @@
 {
   "schema_version": "1",
-  "arm": "cybergym-gpt5.6-sol-daytona-no-internet-v1",
+  "arm": "cybergym-claude-opus-5-daytona-no-internet-v1",
   "canonical_native_result": false,
   "merge_with_native_campaign": false,
-  "job_name": "cybergym-gpt5.6-sol-2",
+  "job_name": "cybergym-claude-opus-5-2",
   "agent": {
     "scaffold": "upstream-openhands-0.33-codeact",
     "openhands_commit": "7656b71d07da6694e262f9c34ea994cd4849c0eb",
     "agent_gitlink": "b5cbe061b25e5719d296711706710438f6693079",
-    "model": "gpt-5.6-sol",
-    "reasoning_effort": "xhigh"
+    "model": "claude-opus-5",
+    "reasoning_effort": null
   },
   "runtime": {
     "provider": "daytona",
@@ -29,6 +29,6 @@
     "task_selection": "unfinished_native_manifest_snapshot_only",
     "separate_hud_jobs": true,
     "separate_scorecard": true,
-    "retry_policy": "no_automatic_provider_retry_after_paid_boundary"
+    "retry_policy": "terminal_error_rows_remain_pending_for_exact_automatic_retry"
   }
 }

@@ -56,9 +56,8 @@ CG_REPOSITORY_ROOT=$REPOSITORY_ROOT CG_SMOKE_TASK_ID=$TASK_ID \
 
 DATA_DIR=${CG_DATA_DIR:?CG_DATA_DIR is required}
 SERVER_URL=${CG_SERVER_URL:?CG_SERVER_URL is required}
-MODEL=${CG_MODEL:-gpt-5.6-sol}
-REASONING_EFFORT=${CG_REASONING_EFFORT:-xhigh}
-JOB_NAME=${CG_JOB_NAME:-cybergym-gpt5.6-sol-no-internet-v1}
+MODEL=${CG_MODEL:-claude-opus-5}
+JOB_NAME=${CG_JOB_NAME:-cybergym-claude-opus-5-no-internet-v1}
 RUNTIME_NETWORK=${CG_RUNTIME_NETWORK:?CG_RUNTIME_NETWORK is required}
 RESULTS_DIR=${CG_RESULTS_DIR:?CG_RESULTS_DIR is required}
 SERVER_MODE=${CG_SERVER_MODE:-images}
@@ -74,7 +73,6 @@ if [ -n "${CG_MODEL_BASE_URL:-}" ]; then
         --data-dir "$DATA_DIR" \
         --server "$SERVER_URL" \
         --model "$MODEL" \
-        --reasoning-effort "$REASONING_EFFORT" \
         --job-name "$JOB_NAME" \
         --base-url "$CG_MODEL_BASE_URL" \
         --grader-server-mode "$SERVER_MODE" \
@@ -93,7 +91,6 @@ exec "$UV_BIN" run --frozen --no-sync --project "$REPOSITORY_ROOT/integrations/h
     --data-dir "$DATA_DIR" \
     --server "$SERVER_URL" \
     --model "$MODEL" \
-    --reasoning-effort "$REASONING_EFFORT" \
     --job-name "$JOB_NAME" \
     --grader-server-mode "$SERVER_MODE" \
     --log-dir "$RESULTS_DIR/logs" \

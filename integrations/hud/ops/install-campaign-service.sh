@@ -51,10 +51,11 @@ TMP=$(mktemp /etc/systemd/system/.cybergym-campaign.XXXXXX)
 trap 'rm -f "$TMP"' EXIT HUP INT TERM
 cat >"$TMP" <<EOF
 [Unit]
-Description=CyberGym GPT-5.6 Sol xhigh full-catalog campaign
+Description=CyberGym Claude Opus 5 full-catalog campaign
 After=docker.service network-online.target cybergym-server.service
 Requires=docker.service cybergym-server.service
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -65,10 +66,10 @@ WorkingDirectory=$REPOSITORY_ROOT
 Environment=HOME=/home/$OPERATOR
 Environment=PATH=$OPERATOR_PATH
 Environment=POETRY_CACHE_DIR=$POETRY_CACHE_DIR
-ExecStart=$REPOSITORY_ROOT/integrations/hud/ops/cybergym-ops campaign --confirm-paid-all --max-concurrent 4 --shard-size 12
-# Resume after a host reboot or abnormal signal, but never loop on an explicit
-# campaign/preflight error. The operator inspects and restarts those manually.
-Restart=on-abnormal
+ExecStart=$REPOSITORY_ROOT/integrations/hud/ops/cybergym-ops campaign --confirm-paid-all --continue-after-errors --max-concurrent 4 --shard-size 12
+# Restart after explicit failures. Reconciliation preserves valid terminal
+# receipts and leaves only exact infrastructure-error rows pending for retry.
+Restart=on-failure
 RestartSec=30
 UMask=0077
 LimitCORE=0
@@ -93,4 +94,4 @@ systemctl start cybergym-campaign.service
 # failure exits before Job creation/provider spend and leaves the unit failed.
 systemctl is-active --quiet cybergym-campaign.service \
     || { printf '%s\n' 'install-campaign-service: campaign did not become active' >&2; exit 1; }
-printf '%s\n' 'Installed and started cybergym-campaign.service (gpt-5.6-sol/xhigh, 200 steps, rolling width 4).'
+printf '%s\n' 'Installed and started cybergym-campaign.service (claude-opus-5, 200 steps, rolling width 4).'

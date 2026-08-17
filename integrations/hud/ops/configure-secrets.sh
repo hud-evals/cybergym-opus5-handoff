@@ -9,8 +9,9 @@ usage() {
     cat <<'EOF'
 Usage: sudo configure-secrets.sh [--operator USER]
 
-Prompt privately for HUD_API_KEY and OPENAI_API_KEY, rotate the internal
-CyberGym server key, and atomically write /etc/cybergym/{server,runner}.env.
+Prompt privately for HUD_API_KEY, ANTHROPIC_API_KEY, and DAYTONA_API_KEY,
+rotate the internal CyberGym server key, and atomically write the protected
+operator environment files under /etc/cybergym.
 EOF
 }
 
@@ -97,7 +98,8 @@ def write_atomic(path: Path, values: dict[str, str], mode: int) -> None:
 
 
 hud_key = prompt_twice("HUD API key")
-openai_key = prompt_twice("OpenAI API key")
+anthropic_key = prompt_twice("Anthropic API key")
+daytona_key = prompt_twice("Daytona API key")
 private_key = f"cybergym-{secrets.token_urlsafe(32)}"
 uv_bin = shutil.which("uv")
 if not uv_bin:
@@ -123,26 +125,30 @@ server = {
 }
 runner = {
     "HUD_API_KEY": hud_key,
-    "OPENAI_API_KEY": openai_key,
+    "ANTHROPIC_API_KEY": anthropic_key,
     "CG_DATA_DIR": "/srv/cybergym-runtime/task-data/cybergym-data/data",
     "CG_DATA_PROVENANCE": "/srv/cybergym-runtime/task-data/provenance/PROVENANCE.json",
     "CG_SERVER_URL": "http://172.30.0.1:8666",
     "CG_RUNTIME_NETWORK": "cybergym-no-internet",
-    "CG_MODEL": "gpt-5.6-sol",
-    "CG_REASONING_EFFORT": "xhigh",
-    "CG_JOB_NAME": "cybergym-gpt5.6-sol-no-internet-v1",
+    "CG_MODEL": "claude-opus-5",
+    "CG_REASONING_EFFORT": "",
+    "CG_JOB_NAME": "cybergym-claude-opus-5-no-internet-v1",
     "CG_MODEL_BASE_URL": "",
     "CG_SMOKE_TASK_ID": "arvo:10400",
     "CG_CAMPAIGN_MAX_CONCURRENT": "4",
     "CG_CAMPAIGN_SHARD_SIZE": "12",
 }
+daytona = {
+    "DAYTONA_API_KEY": daytona_key,
+}
 
 write_atomic(Path("/etc/cybergym/server.env"), server, 0o640)
 write_atomic(Path("/etc/cybergym/runner.env"), runner, 0o640)
+write_atomic(Path("/etc/cybergym/daytona.env"), daytona, 0o640)
 
 # Drop references promptly; process exit clears the remaining interpreter state.
-hud_key = openai_key = private_key = ""
-print(f"Wrote /etc/cybergym/server.env and runner.env for root:{group.gr_name} (values suppressed).")
+hud_key = anthropic_key = daytona_key = private_key = ""
+print(f"Wrote protected CyberGym environment files for root:{group.gr_name} (values suppressed).")
 PY
 
 # Do not restart here: on an existing worker this may still be the incompatible

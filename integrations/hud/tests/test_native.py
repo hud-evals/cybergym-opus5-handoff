@@ -211,6 +211,17 @@ def test_gpt56_xhigh_profile_is_validated_and_receipted(config: NativeOpenHandsC
         replace(config, reasoning_effort="xhigh").normalized()
 
 
+def test_claude_opus_5_direct_profile_is_receipted(config: NativeOpenHandsConfig) -> None:
+    configured = replace(config, model="claude-opus-5", reasoning_effort=None).normalized()
+    profile = configured.receipt_profile()
+    assert profile.model == "claude-opus-5"
+    assert profile.reasoning_effort is None
+    assert profile.reasoning_transport == "none"
+    assert profile.response_storage == "none"
+    assert profile.response_continuation == "none"
+    assert profile.omitted_sampling_parameters == ()
+
+
 def test_runtime_limits_are_coherent_and_receipted(config: NativeOpenHandsConfig) -> None:
     configured = replace(
         config,

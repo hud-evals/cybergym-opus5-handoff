@@ -10,9 +10,9 @@ REPOSITORY_ROOT=${CG_REPOSITORY_ROOT:-$DEFAULT_ROOT}
 TASK_ID=${CG_SMOKE_TASK_ID:-arvo:10400}
 DATA_DIR=${CG_DATA_DIR:-}
 SERVER_URL=${CG_SERVER_URL:-}
-MODEL=${CG_MODEL:-gpt-5.6-sol}
+MODEL=${CG_MODEL:-claude-opus-5}
 MODEL_BASE_URL=${CG_MODEL_BASE_URL:-}
-REASONING_EFFORT=${CG_REASONING_EFFORT:-xhigh}
+REASONING_EFFORT=${CG_REASONING_EFFORT-}
 RESULTS_DIR=${CG_RESULTS_DIR:-}
 SERVER_MODE=${CG_SERVER_MODE:-images}
 SERVER_BINARY_DIR=${CG_SERVER_BINARY_DIR:-}
@@ -155,6 +155,23 @@ if [ "$MODEL" = gpt-5.6-sol ]; then
         --repository-root "$REPOSITORY_ROOT" >/dev/null \
         || die "pinned OpenHands did not complete the local two-turn gpt-5.6-sol/xhigh Responses proof"
     ok 'pinned OpenHands gpt-5.6-sol/xhigh two-turn Responses proof (localhost only)'
+elif [ "$MODEL" = claude-opus-5 ]; then
+    [ -z "$REASONING_EFFORT" ] \
+        || die "claude-opus-5 runs require empty CG_REASONING_EFFORT"
+    (cd "$OPENHANDS_ROOT" && poetry run python - <<'PY'
+from openhands.core.config import LLMConfig
+from openhands.llm.llm import LLM
+
+config = LLMConfig(model="claude-opus-5", api_key="offline-preflight-key")
+llm = LLM(config=config)
+assert llm.config.model == "claude-opus-5"
+assert llm.config.api_key.get_secret_value() == "offline-preflight-key"
+PY
+    ) >/dev/null 2>&1 \
+        || die "pinned OpenHands Claude Opus 5 provider probe failed without a model call"
+    ok 'pinned OpenHands Claude Opus 5 provider construction (no model call)'
+else
+    die "Anthropic branch requires CG_MODEL=claude-opus-5"
 fi
 
 "$SCRIPT_DIR/runtime-image.sh" verify >/dev/null \
@@ -259,6 +276,32 @@ ok 'HUD authentication (no model call)'
 # model without creating a completion. Custom gateways are protocol-specific,
 # so their key is presence-checked above and exercised only by the spend gate.
 case "$MODEL" in
+    claude-*)
+        if [ -z "$MODEL_BASE_URL" ]; then
+            "$UV_BIN" run --frozen --no-sync --project "$REPOSITORY_ROOT/integrations/hud" python - "$MODEL" <<'PY' \
+                || die "ANTHROPIC_API_KEY authentication or model access failed"
+import os
+import sys
+from urllib.parse import quote
+
+import httpx
+
+model = quote(sys.argv[1], safe="")
+response = httpx.get(
+    f"https://api.anthropic.com/v1/models/{model}",
+    headers={
+        "x-api-key": os.environ["ANTHROPIC_API_KEY"],
+        "anthropic-version": "2023-06-01",
+    },
+    timeout=15.0,
+)
+raise SystemExit(0 if response.status_code == 200 else 1)
+PY
+            ok 'Anthropic authentication and exact model access (no inference)'
+        else
+            ok 'custom model endpoint configured; provider key presence checked'
+        fi
+        ;;
     gpt-*|o3*|o4*)
         if [ -z "$MODEL_BASE_URL" ]; then
             "$UV_BIN" run --frozen --no-sync --project "$REPOSITORY_ROOT/integrations/hud" python - "$MODEL" <<'PY' \
