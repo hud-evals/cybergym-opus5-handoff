@@ -434,6 +434,14 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
         help="required private-only Docker network for every agent runtime",
     )
+    parser.add_argument(
+        "--execution-backend",
+        choices=("native-docker", "daytona-private"),
+        default="native-docker",
+        help="separately labelled OpenHands placement backend",
+    )
+    parser.add_argument("--daytona-ledger", type=Path)
+    parser.add_argument("--daytona-known-hosts", type=Path)
     return parser
 
 
@@ -487,6 +495,9 @@ def main() -> None:
         remove_tmp=not args.keep_tmp,
         debug=args.debug,
         runtime_network=args.runtime_network,
+        execution_backend=args.execution_backend,
+        daytona_ledger_path=args.daytona_ledger,
+        daytona_known_hosts=args.daytona_known_hosts,
     )
     if len(selected) == 1:
         result = asyncio.run(run_one(selected[0], config, job_name=args.job_name))

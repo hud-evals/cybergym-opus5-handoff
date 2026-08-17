@@ -5,6 +5,7 @@ import json
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -215,6 +216,23 @@ def test_runtime_limits_are_coherent_and_receipted(config: NativeOpenHandsConfig
         replace(config, runtime_network=None).normalized()  # type: ignore[arg-type]
 
 
+def test_daytona_profile_is_distinct_and_requires_private_runtime_paths(
+    config: NativeOpenHandsConfig,
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="ledger and SSH"):
+        replace(config, execution_backend="daytona-private").normalized()
+    configured = replace(
+        config,
+        execution_backend="daytona-private",
+        daytona_ledger_path=tmp_path / "sandboxes.jsonl",
+        daytona_known_hosts=tmp_path / "known-hosts",
+    ).normalized()
+    profile = configured.receipt_profile()
+    assert profile.execution_backend == "daytona-private"
+    assert profile.network_mode == "cybergym-daytona-ssh-private-grader-no-public-egress-v1"
+
+
 def test_openhands_subprocess_proxy_injects_only_the_exact_child(tmp_path: Path) -> None:
     calls = []
 
@@ -264,6 +282,72 @@ def test_openhands_subprocess_proxy_injects_only_the_exact_child(tmp_path: Path)
     assert config_path.stat().st_mode & 0o777 == 0o600
     with pytest.raises(RuntimeError, match="unexpected command"):
         proxy.run(["/usr/bin/poetry", "run", "python", "other.py"], env={})
+
+
+def test_openhands_subprocess_proxy_uses_private_daytona_attachment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls = []
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "submit.sh").write_text(
+        "curl http://172.30.0.1:8666/submit-vul\n",
+        encoding="utf-8",
+    )
+
+    class Delegate:
+        TimeoutExpired = subprocess.TimeoutExpired
+
+        def run(self, command, *args, **kwargs):
+            calls.append((command, args, kwargs))
+            return "done"
+
+    configured = []
+
+    def fake_configure(_path: Path) -> Path:
+        configured.append(True)
+        return workspace
+
+    @contextmanager
+    def fake_runtime(**kwargs):
+        assert kwargs["task_id"] == "arvo:10013"
+        assert kwargs["server"] == "http://172.30.0.1:8666"
+        yield SimpleNamespace(action_url="http://127.0.0.1:43210")
+
+    monkeypatch.setattr("cybergym_hud.daytona_lane.configure_attached_runtime", fake_configure)
+    monkeypatch.setattr("cybergym_hud.daytona_lane.prepared_daytona_runtime", fake_runtime)
+    proxy = _OpenHandsSubprocessProxy(
+        Delegate(),
+        shim_dir=tmp_path / "shim",
+        reasoning_effort="xhigh",
+        execution_backend="daytona-private",
+        task_id="arvo:10013",
+        server="http://172.30.0.1:8666",
+        daytona_ledger_path=tmp_path / "ledger.jsonl",
+        daytona_known_hosts=tmp_path / "known-hosts",
+    )
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[core]\n", encoding="utf-8")
+    command = [
+        "/usr/bin/poetry",
+        "run",
+        "python",
+        "-m",
+        "openhands.core.main",
+        "--config-file",
+        str(config_path),
+    ]
+
+    assert proxy.run(command, env={"LLM_API_KEY": "secret"}) == "done"
+    assert configured == [True]
+    assert calls[0][2]["env"] == {
+        "LLM_API_KEY": "secret",
+        "PYTHONPATH": str(tmp_path / "shim"),
+        "CYBERGYM_REASONING_EFFORT": "xhigh",
+        "CYBERGYM_DAYTONA_ACTION_URL": "http://127.0.0.1:43210",
+    }
+    assert (workspace / "submit.sh").read_text() == ("curl http://127.0.0.1:8666/submit-vul\n")
 
 
 @pytest.mark.asyncio

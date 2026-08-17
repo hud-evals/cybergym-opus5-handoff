@@ -74,6 +74,9 @@ class NativeOpenHandsConfig:
     runtime_memory_bytes: int | None = None
     runtime_memory_swap_bytes: int | None = None
     runtime_network: Literal["cybergym-no-internet"] = RUNTIME_NETWORK_NAME
+    execution_backend: Literal["native-docker", "daytona-private"] = "native-docker"
+    daytona_ledger_path: Path | None = None
+    daytona_known_hosts: Path | None = None
     # Runtime-only bridge.  It is deliberately absent from repr/equality and
     # every durable receipt/profile so callable state and trace credentials
     # can never enter campaign journals.
@@ -112,6 +115,12 @@ class NativeOpenHandsConfig:
                 raise ValueError("runtime memory+swap limit may not be lower than the memory limit")
         if self.runtime_network != RUNTIME_NETWORK_NAME:
             raise ValueError(f"unsupported runtime network: {self.runtime_network!r}")
+        if self.execution_backend not in {"native-docker", "daytona-private"}:
+            raise ValueError("unsupported OpenHands execution backend")
+        if self.execution_backend == "daytona-private" and (
+            self.daytona_ledger_path is None or self.daytona_known_hosts is None
+        ):
+            raise ValueError("Daytona execution requires ledger and SSH known-hosts paths")
         return NativeOpenHandsConfig(
             repository_root=root,
             data_dir=self.data_dir.expanduser().resolve(),
@@ -137,6 +146,13 @@ class NativeOpenHandsConfig:
             runtime_memory_bytes=self.runtime_memory_bytes,
             runtime_memory_swap_bytes=self.runtime_memory_swap_bytes,
             runtime_network=self.runtime_network,
+            execution_backend=self.execution_backend,
+            daytona_ledger_path=(
+                self.daytona_ledger_path.expanduser().resolve() if self.daytona_ledger_path is not None else None
+            ),
+            daytona_known_hosts=(
+                self.daytona_known_hosts.expanduser().resolve() if self.daytona_known_hosts is not None else None
+            ),
             trace_step_sink=self.trace_step_sink,
             trace_projection_sink=self.trace_projection_sink,
         )
@@ -170,7 +186,12 @@ class NativeOpenHandsConfig:
             runtime_nano_cpus=self.runtime_nano_cpus,
             runtime_memory_bytes=self.runtime_memory_bytes,
             runtime_memory_swap_bytes=self.runtime_memory_swap_bytes,
-            network_mode="cybergym-docker-internal-no-public-egress-v1",
+            execution_backend=self.execution_backend,
+            network_mode=(
+                "cybergym-daytona-ssh-private-grader-no-public-egress-v1"
+                if self.execution_backend == "daytona-private"
+                else "cybergym-docker-internal-no-public-egress-v1"
+            ),
         )
 
 
@@ -316,11 +337,21 @@ class _OpenHandsSubprocessProxy:
         shim_dir: Path,
         reasoning_effort: str | None,
         runtime_kwargs: dict[str, Any] | None = None,
+        execution_backend: Literal["native-docker", "daytona-private"] = "native-docker",
+        task_id: str | None = None,
+        server: str | None = None,
+        daytona_ledger_path: Path | None = None,
+        daytona_known_hosts: Path | None = None,
     ) -> None:
         self._delegate = delegate
         self._shim_dir = shim_dir
         self._reasoning_effort = reasoning_effort
         self._runtime_kwargs = runtime_kwargs
+        self._execution_backend = execution_backend
+        self._task_id = task_id
+        self._server = server
+        self._daytona_ledger_path = daytona_ledger_path
+        self._daytona_known_hosts = daytona_known_hosts
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._delegate, name)
@@ -331,10 +362,40 @@ class _OpenHandsSubprocessProxy:
         if len(normalized) < 5 or tuple(normalized[1:5]) != marker:
             raise RuntimeError(f"refusing to inject reasoning shim into unexpected command: {normalized!r}")
         child_env = dict(kwargs.get("env") or {})
-        if self._reasoning_effort or self._runtime_kwargs is not None:
+        if self._reasoning_effort or self._runtime_kwargs is not None or self._execution_backend == "daytona-private":
             child_env["PYTHONPATH"] = str(self._shim_dir)
         if self._reasoning_effort:
             child_env["CYBERGYM_REASONING_EFFORT"] = self._reasoning_effort
+        if self._execution_backend == "daytona-private":
+            if (
+                self._task_id is None
+                or self._server is None
+                or self._daytona_ledger_path is None
+                or self._daytona_known_hosts is None
+            ):
+                raise RuntimeError("Daytona subprocess proxy is missing its rollout binding")
+            try:
+                config_index = normalized.index("--config-file") + 1
+                config_path = Path(normalized[config_index])
+                from .daytona_lane import (
+                    configure_attached_runtime,
+                    prepared_daytona_runtime,
+                    rewrite_submit_server,
+                )
+
+                workspace = configure_attached_runtime(config_path)
+                rewrite_submit_server(workspace, source=self._server)
+                with prepared_daytona_runtime(
+                    task_id=self._task_id,
+                    server=self._server,
+                    ledger_path=self._daytona_ledger_path,
+                    known_hosts=self._daytona_known_hosts,
+                ) as runtime:
+                    child_env["CYBERGYM_DAYTONA_ACTION_URL"] = runtime.action_url
+                    kwargs["env"] = child_env
+                    return self._delegate.run(command, *args, **kwargs)
+            except (OSError, ValueError, tomllib.TOMLDecodeError) as exc:
+                raise RuntimeError("could not prepare the private Daytona runtime") from exc
         if self._runtime_kwargs is not None:
             child_env["CYBERGYM_RUNTIME_NETWORK"] = str(self._runtime_kwargs["network"])
             try:
@@ -465,7 +526,7 @@ def execute_upstream_openhands(
     upstream = module or load_upstream_openhands(config.repository_root)
     original_subprocess = getattr(upstream, "subprocess", None)
     runtime_kwargs = None
-    if config.runtime_nano_cpus is not None or config.runtime_network:
+    if config.execution_backend == "native-docker" and (config.runtime_nano_cpus is not None or config.runtime_network):
         runtime_kwargs = {"auto_remove": True}
         runtime_kwargs["network"] = config.runtime_network
         if config.runtime_nano_cpus is not None:
@@ -476,7 +537,7 @@ def execute_upstream_openhands(
                     "memswap_limit": config.runtime_memory_swap_bytes,
                 }
             )
-    if config.reasoning_effort or runtime_kwargs is not None:
+    if config.reasoning_effort or runtime_kwargs is not None or config.execution_backend == "daytona-private":
         if original_subprocess is None:
             return NativeReceipt(
                 status="error",
@@ -499,6 +560,11 @@ def execute_upstream_openhands(
             shim_dir=shim_dir,
             reasoning_effort=config.reasoning_effort,
             runtime_kwargs=runtime_kwargs,
+            execution_backend=config.execution_backend,
+            task_id=binding.task_id,
+            server=binding.server,
+            daytona_ledger_path=config.daytona_ledger_path,
+            daytona_known_hosts=config.daytona_known_hosts,
         )
     fresh_uuid = uuid_factory()
     agent_id = fresh_uuid.hex
@@ -594,7 +660,7 @@ def execute_upstream_openhands(
             except Exception:
                 trace_projection_failed = True
         upstream.uuid4 = original_uuid4
-        if config.reasoning_effort or runtime_kwargs is not None:
+        if config.reasoning_effort or runtime_kwargs is not None or config.execution_backend == "daytona-private":
             upstream.subprocess = original_subprocess
 
     if trace_setup_failed:

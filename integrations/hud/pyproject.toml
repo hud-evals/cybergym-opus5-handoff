@@ -3,7 +3,9 @@ name = "cybergym-og-hud"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
+  "asyncssh==2.24.0",
   "cybergym[server]",
+  "daytona==0.190.1",
   "docker>=7.1,<8",
   "hud==0.6.13",
   "httpx>=0.28,<1",
@@ -18,6 +20,7 @@ cybergym-hud-run-native = "cybergym_hud.scheduler:main"
 cybergym-hud-run-campaign = "cybergym_hud.campaign:main"
 cybergym-hud-preflight-catalog = "cybergym_hud.catalog_preflight:main"
 cybergym-hud-runtime-network = "cybergym_hud.runtime_network:main"
+cybergym-hud-preflight-daytona = "cybergym_hud.daytona_preflight:main"
 cybergym-hud-attest-grader = "cybergym_hud.grader_attestation:main"
 cybergym-hud-backfill-trace = "cybergym_hud.trace_backfill:main"
 cybergym-hud-run-upstream-openhands = "cybergym_hud.upstream:run_openhands"

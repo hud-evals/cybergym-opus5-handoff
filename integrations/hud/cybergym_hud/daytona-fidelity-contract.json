@@ -1,0 +1,33 @@
+{
+  "schema_version": "1",
+  "arm": "cybergym-gpt5.6-sol-daytona-no-internet-v1",
+  "canonical_native_result": false,
+  "merge_with_native_campaign": false,
+  "job_name": "cybergym-gpt5.6-sol-2",
+  "agent": {
+    "scaffold": "upstream-openhands-0.33-codeact",
+    "openhands_commit": "7656b71d07da6694e262f9c34ea994cd4849c0eb",
+    "agent_gitlink": "b5cbe061b25e5719d296711706710438f6693079",
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "xhigh"
+  },
+  "runtime": {
+    "provider": "daytona",
+    "sdk": "0.190.1",
+    "image": "ghcr.io/all-hands-ai/runtime@sha256:ff8d9ef50ceb475130de5bca59d5c8f4dc9c45e11566ebaa6cae6a95b388d989",
+    "cpu": 4,
+    "memory_gib": 8,
+    "disk_gib": 10,
+    "network": "block_all_after_action_server_and_ssh_tunnel",
+    "action_transport": "private_ssh_local_forward",
+    "grader_transport": "private_ssh_remote_forward_to_vm101_internal_server",
+    "grader_url_in_workspace": "http://127.0.0.1:8666",
+    "daytona_key_in_child_or_workspace": false
+  },
+  "accounting": {
+    "task_selection": "unfinished_native_manifest_snapshot_only",
+    "separate_hud_jobs": true,
+    "separate_scorecard": true,
+    "retry_policy": "no_automatic_provider_retry_after_paid_boundary"
+  }
+}
