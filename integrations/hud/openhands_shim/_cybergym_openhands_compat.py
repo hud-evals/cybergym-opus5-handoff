@@ -24,6 +24,8 @@ API_MODEL = "gpt-5.6-sol"
 EFFORT_ENV = "CYBERGYM_REASONING_EFFORT"
 RUNTIME_NETWORK_ENV = "CYBERGYM_RUNTIME_NETWORK"
 DAYTONA_ACTION_URL_ENV = "CYBERGYM_DAYTONA_ACTION_URL"
+ANTHROPIC_MODEL_ENV = "CYBERGYM_ANTHROPIC_MODEL"
+ANTHROPIC_TARGET_MODEL = "claude-opus-5"
 SUPPORTED_EFFORT = "xhigh"
 SUPPORTED_RUNTIME_NETWORK = "cybergym-no-internet"
 SUPPORTED_RUNTIME_SUBNET = ipaddress.ip_network("172.30.0.0/24")
@@ -685,6 +687,32 @@ def _patch_async_llm_instances(async_llm: Any, effort: str) -> None:
     cls._call_acompletion = patched_call
 
 
+def _patch_claude_llm_instances(llm: Any) -> None:
+    """Remove Opus 5's deprecated temperature from the pinned LiteLLM call."""
+
+    cls = llm.LLM
+    original_init = cls.__init__
+    if getattr(original_init, "_cybergym_claude_opus5", False):
+        return
+
+    @functools.wraps(original_init)
+    def patched_init(self: Any, *args: Any, **kwargs: Any) -> None:
+        original_init(self, *args, **kwargs)
+        if self.config.model != ANTHROPIC_TARGET_MODEL:
+            return
+        original = self._completion_unwrapped
+        if not isinstance(original, functools.partial):
+            raise RuntimeError("pinned OpenHands Claude transport is no longer a functools.partial")
+        keywords = dict(original.keywords or {})
+        temperature = keywords.pop("temperature", None)
+        if isinstance(temperature, bool) or not isinstance(temperature, int | float) or float(temperature) != 0.0:
+            raise RuntimeError("pinned OpenHands Claude temperature default drifted")
+        self._completion_unwrapped = functools.partial(original.func, *original.args, **keywords)
+
+    patched_init._cybergym_claude_opus5 = True
+    cls.__init__ = patched_init
+
+
 def _patch_docker_runtime(docker_runtime: Any, network: str) -> None:
     """Connect the host controller directly to its internal-only container.
 
@@ -734,7 +762,8 @@ def install() -> bool:
     effort = os.environ.get(EFFORT_ENV)
     runtime_network = os.environ.get(RUNTIME_NETWORK_ENV)
     daytona_action_url = os.environ.get(DAYTONA_ACTION_URL_ENV)
-    if effort is None and runtime_network is None and daytona_action_url is None:
+    anthropic_model = os.environ.get(ANTHROPIC_MODEL_ENV)
+    if effort is None and runtime_network is None and daytona_action_url is None and anthropic_model is None:
         return False
     if runtime_network is not None and daytona_action_url is not None:
         raise RuntimeError("CyberGym OpenHands child cannot select Docker and Daytona runtimes together")
@@ -753,6 +782,12 @@ def install() -> bool:
         _patch_docker_runtime(docker_runtime, runtime_network)
     elif not daytona_attached:
         raise RuntimeError(f"either {RUNTIME_NETWORK_ENV} or a loopback-only {DAYTONA_ACTION_URL_ENV} is required")
+    if anthropic_model is not None:
+        if anthropic_model != ANTHROPIC_TARGET_MODEL:
+            raise RuntimeError(f"{ANTHROPIC_MODEL_ENV} must be {ANTHROPIC_TARGET_MODEL!r}; got {anthropic_model!r}")
+        from openhands.llm import llm
+
+        _patch_claude_llm_instances(llm)
     if effort is None:
         return True
     if effort != SUPPORTED_EFFORT:

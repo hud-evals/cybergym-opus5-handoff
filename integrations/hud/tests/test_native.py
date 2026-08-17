@@ -361,6 +361,7 @@ def test_subprocess_proxy_omits_only_deprecated_claude_temperature(tmp_path: Pat
     assert "temperature" not in rendered
     assert "top_p = 1.0" in rendered
     assert "CYBERGYM_REASONING_EFFORT" not in calls[0][2]["env"]
+    assert calls[0][2]["env"]["CYBERGYM_ANTHROPIC_MODEL"] == "claude-opus-5"
 
 
 @pytest.mark.parametrize("signed_transport", [False, True])

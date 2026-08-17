@@ -460,6 +460,8 @@ class _OpenHandsSubprocessProxy:
             child_env["PYTHONPATH"] = str(self._shim_dir)
         if self._reasoning_effort:
             child_env["CYBERGYM_REASONING_EFFORT"] = self._reasoning_effort
+        if self._model == "claude-opus-5":
+            child_env["CYBERGYM_ANTHROPIC_MODEL"] = self._model
         if self._execution_backend == "daytona-private":
             if (
                 self._task_id is None

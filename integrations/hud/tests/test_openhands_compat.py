@@ -1017,6 +1017,53 @@ def test_private_runtime_patch_rejects_an_extra_network_attachment() -> None:
         Runtime()._init_container()
 
 
+def test_claude_opus5_patch_omits_deprecated_temperature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compat = _load()
+
+    def completion(*_args, **_kwargs):
+        return "completion"
+
+    class LLM:
+        def __init__(self, model: str = "claude-opus-5"):
+            self.config = SimpleNamespace(model=model)
+            self._completion_unwrapped = functools.partial(
+                completion,
+                model=model,
+                api_key="fake",
+                temperature=0.0,
+                top_p=1.0,
+            )
+
+    llm_module = ModuleType("openhands.llm.llm")
+    llm_module.LLM = LLM
+    package = ModuleType("openhands.llm")
+    package.llm = llm_module
+    openhands = ModuleType("openhands")
+    openhands.llm = package
+    for name, value in {
+        "openhands": openhands,
+        "openhands.llm": package,
+        "openhands.llm.llm": llm_module,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, value)
+    monkeypatch.delenv("CYBERGYM_REASONING_EFFORT", raising=False)
+    monkeypatch.delenv("CYBERGYM_RUNTIME_NETWORK", raising=False)
+    monkeypatch.setenv("CYBERGYM_DAYTONA_ACTION_URL", "http://127.0.0.1:43210")
+    monkeypatch.setenv("CYBERGYM_ANTHROPIC_MODEL", "claude-opus-5")
+
+    assert compat.install() is True
+    target = LLM()
+    assert target._completion_unwrapped.keywords == {
+        "model": "claude-opus-5",
+        "api_key": "fake",
+        "top_p": 1.0,
+    }
+    non_target = LLM("claude-sonnet-5")
+    assert non_target._completion_unwrapped.keywords["temperature"] == 0.0
+
+
 def test_private_runtime_patch_activates_without_reasoning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

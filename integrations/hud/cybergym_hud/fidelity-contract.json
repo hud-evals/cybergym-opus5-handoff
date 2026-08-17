@@ -106,8 +106,8 @@
       "transport_omits": ["temperature", "reasoning_effort"],
       "protected_upstream_sources_modified": false,
       "shim_sha256": {
-        "openhands_shim/sitecustomize.py": "d7e2fa09d7d7d67731f95d338e91ec346e5eb6067afaebfa0db8bddcd10c6bfd",
-        "openhands_shim/_cybergym_openhands_compat.py": "1006f1f1e4dc205fd1d4a218322189ec7566f1f7f06d2a85cee850347b29d3bb"
+        "openhands_shim/sitecustomize.py": "61c205ff73a2c6575cdbe92d329ed00102d9754bead7a0535b2bdc1d0c104635",
+        "openhands_shim/_cybergym_openhands_compat.py": "7690dcbef94118d2839bd636d8b604f16e16c78389976fc6da53e980f139e988"
       }
     },
     "agent_id": "fresh_uuid4_per_rollout",
