@@ -18,7 +18,7 @@ from hud.eval.runtime import LocalRuntime
 from hud.settings import settings
 from hud.utils.platform import PlatformClient
 
-from .artifact_storage import enforce_private_file_mode
+from .artifact_storage import enforce_private_file_mode, is_trusted_artifact_volume_path
 from .cleanup import cleanup_tracked_root
 from .contract import validate_contract
 from .env import build_env
@@ -150,6 +150,9 @@ def write_summary(path: Path, payload: dict[str, Any]) -> None:
 
     path.parent.mkdir(parents=True, exist_ok=True)
     encoded = (json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n").encode()
+    if is_trusted_artifact_volume_path(path):
+        path.write_bytes(encoded)
+        return
     temporary = path.with_suffix(".tmp")
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(temporary, flags, 0o600)
