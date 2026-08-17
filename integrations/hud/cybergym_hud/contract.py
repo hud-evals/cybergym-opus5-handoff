@@ -209,7 +209,7 @@ def validate_contract(
         "shim_sha256": {
             "openhands_shim/sitecustomize.py": "d7e2fa09d7d7d67731f95d338e91ec346e5eb6067afaebfa0db8bddcd10c6bfd",
             "openhands_shim/_cybergym_openhands_compat.py": (
-                "59cdc1bdcb64802355eff14dd95e093401fee8158b7bf022a1cfebce25e558e3"
+                "7d4d16836ddabab738086e24231a6edd6bebdb391487b909aed7f87e142b6122"
             ),
         },
     }:

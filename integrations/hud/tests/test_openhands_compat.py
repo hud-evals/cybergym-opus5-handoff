@@ -423,6 +423,24 @@ def test_multipart_message_text_preserves_each_responses_input_part() -> None:
     )
 
 
+def test_multipart_assistant_history_uses_responses_output_text() -> None:
+    compat = _load()
+    converted = compat._chat_messages_to_responses(
+        [
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "retained assistant history"}],
+            }
+        ]
+    )
+    assert converted == [
+        {
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "retained assistant history"}],
+        }
+    ]
+
+
 def test_sdk_retry_count_and_connection_error_preserve_openhands_outer_retry() -> None:
     compat = _load()
     request = httpx.Request("POST", "http://127.0.0.1:1/v1/responses")
@@ -665,7 +683,7 @@ def test_condensed_text_tail_replays_latest_matching_reasoning_item() -> None:
         {"id": "rs_new", "type": "reasoning", "summary": [], "status": "completed"},
         {
             "role": "assistant",
-            "content": [{"type": "input_text", "text": "same"}],
+            "content": [{"type": "output_text", "text": "same"}],
         },
         {"role": "user", "content": "new context"},
     ]

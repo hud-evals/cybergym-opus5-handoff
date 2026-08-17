@@ -68,9 +68,11 @@ def _text_content(content: Any) -> str:
     return "".join(texts)
 
 
-def _message_content(content: Any) -> str | list[dict[str, str]]:
+def _message_content(content: Any, *, role: str) -> str | list[dict[str, str]]:
     """Preserve OpenHands' individual text parts for Responses messages."""
 
+    if role not in {"system", "user", "assistant"}:
+        raise RuntimeError(f"unsupported OpenHands message role: {role!r}")
     if content is None or isinstance(content, str):
         return content or ""
     if not isinstance(content, Sequence) or isinstance(content, bytes | bytearray):
@@ -82,7 +84,8 @@ def _message_content(content: Any) -> str | list[dict[str, str]]:
             text = _field(part, "text")
             if not isinstance(text, str):
                 raise RuntimeError("OpenHands text content is not a string")
-            converted.append({"type": "input_text", "text": text})
+            part_kind = "output_text" if role == "assistant" else "input_text"
+            converted.append({"type": part_kind, "text": text})
         elif part_type == "thinking":
             continue
         else:
@@ -154,7 +157,7 @@ def _chat_messages_to_responses(messages: Any) -> list[dict[str, Any]]:
         if role not in {"system", "user", "assistant"}:
             raise RuntimeError(f"unsupported OpenHands message role: {role!r}")
         tool_calls = _field(message, "tool_calls")
-        content = _message_content(_field(message, "content"))
+        content = _message_content(_field(message, "content"), role=role)
         # Responses represents assistant function calls as top-level output
         # items.  Do not add an empty assistant message beside a tool-only
         # turn: OpenHands' Chat representation uses ``content=None`` there.
