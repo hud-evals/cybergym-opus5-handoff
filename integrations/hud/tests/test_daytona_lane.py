@@ -13,6 +13,8 @@ from fastapi.testclient import TestClient
 from cybergym_hud.daytona_campaign import _load_task_file, _require_daytona_preflight
 from cybergym_hud.daytona_lane import (
     RUNTIME_CLASS,
+    _register_relay_remote,
+    _relay_settings,
     configure_attached_runtime,
     open_sandbox_bindings,
     reconcile_daytona_sandboxes,
@@ -242,3 +244,91 @@ def test_relay_rejects_unknown_paths_and_cross_task_submissions(tmp_path: Path) 
         files={"file": ("poc", b"data")},
     )
     assert response.status_code == 403
+
+
+def test_relay_admin_creates_and_deletes_private_task_binding(tmp_path: Path) -> None:
+    registry = tmp_path / "registry"
+    registry.mkdir(mode=0o700)
+    admin_token = "b" * 64
+    client = TestClient(
+        build_app(
+            registry=registry,
+            upstream="http://127.0.0.1:8666",
+            admin_token=admin_token,
+        )
+    )
+
+    assert client.post("/admin/v1/bindings", json={"task_id": "arvo:10013"}).status_code == 401
+    response = client.post(
+        "/admin/v1/bindings",
+        json={"task_id": "arvo:10013"},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert response.status_code == 200
+    token = response.json()["token"]
+    binding = registry / f"{token}.json"
+    assert binding.is_file() and stat.S_IMODE(binding.stat().st_mode) == 0o600
+    assert json.loads(binding.read_text())["task_id"] == "arvo:10013"
+
+    deleted = client.delete(
+        f"/admin/v1/bindings/{token}",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert deleted.status_code == 204
+    assert not binding.exists()
+
+
+def test_remote_relay_registration_is_authenticated_and_released(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = "c" * 64
+    calls: list[tuple[str, str, dict[str, str]]] = []
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, str]:
+            return {"token": token}
+
+    def post(url: str, *, json, headers, timeout: int):
+        assert json == {"task_id": "arvo:10013"}
+        assert timeout == 30
+        calls.append(("POST", url, headers))
+        return Response()
+
+    def delete(url: str, *, headers, timeout: int):
+        assert timeout == 30
+        calls.append(("DELETE", url, headers))
+        return Response()
+
+    monkeypatch.setattr("cybergym_hud.daytona_lane.httpx.post", post)
+    monkeypatch.setattr("cybergym_hud.daytona_lane.httpx.delete", delete)
+
+    observed, release = _register_relay_remote(
+        "https://relay.example:8443",
+        admin_token="d" * 64,
+        task_id="arvo:10013",
+    )
+    assert observed == token
+    release()
+    assert [method for method, _url, _headers in calls] == ["POST", "DELETE"]
+    assert all(headers == {"Authorization": f"Bearer {'d' * 64}"} for _method, _url, headers in calls)
+
+
+def test_remote_relay_settings_support_separate_funnel_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CG_DAYTONA_RELAY_URL", "https://relay.example:8443")
+    monkeypatch.delenv("CG_DAYTONA_RELAY_REGISTRY", raising=False)
+    monkeypatch.setenv("CG_DAYTONA_RELAY_ADMIN_TOKEN", "e" * 64)
+    monkeypatch.setenv("CG_DAYTONA_RELAY_CIDRS", "8.8.8.8/32")
+
+    settings = _relay_settings()
+    assert settings[:5] == (
+        "https://relay.example:8443",
+        "relay.example",
+        8443,
+        "8.8.8.8/32",
+        "8.8.8.8",
+    )
+    assert settings[5] is None
+    assert settings[6] == "e" * 64

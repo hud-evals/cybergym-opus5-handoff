@@ -11,7 +11,7 @@ import secrets
 import stat
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -286,16 +286,24 @@ class DaytonaPreparedRuntime:
     sandbox_id: str
 
 
-def _relay_settings() -> tuple[str, str, str, str, Path]:
+def _relay_settings() -> tuple[str, str, int, str, str, Path | None, str | None]:
     from urllib.parse import urlsplit
 
     base_url = os.environ.get("CG_DAYTONA_RELAY_URL", "").strip().rstrip("/")
     parsed = urlsplit(base_url)
     if parsed.scheme != "https" or parsed.hostname is None or parsed.path:
         raise ValueError("CG_DAYTONA_RELAY_URL must be an HTTPS origin without a path")
+    port = parsed.port or 443
+    if port not in {443, 8443, 10000}:
+        raise ValueError("CG_DAYTONA_RELAY_URL must use a supported Tailscale Funnel HTTPS port")
+    admin_token = os.environ.get("CG_DAYTONA_RELAY_ADMIN_TOKEN", "").strip() or None
+    if admin_token is not None and (
+        len(admin_token) != 64 or any(character not in "0123456789abcdef" for character in admin_token)
+    ):
+        raise ValueError("CG_DAYTONA_RELAY_ADMIN_TOKEN must be 32-byte lowercase hexadecimal")
     registry_raw = os.environ.get("CG_DAYTONA_RELAY_REGISTRY", "").strip()
-    if not registry_raw:
-        raise ValueError("CG_DAYTONA_RELAY_REGISTRY is required")
+    if not registry_raw and admin_token is None:
+        raise ValueError("CG_DAYTONA_RELAY_REGISTRY or remote administrator authentication is required")
     cidrs_raw = os.environ.get("CG_DAYTONA_RELAY_CIDRS", "").strip()
     cidrs = [value.strip() for value in cidrs_raw.split(",") if value.strip()]
     if not cidrs:
@@ -312,13 +320,15 @@ def _relay_settings() -> tuple[str, str, str, str, Path]:
     return (
         base_url,
         parsed.hostname,
+        port,
         ",".join(cidrs),
         relay_ipv4,
-        Path(registry_raw).expanduser().resolve(),
+        Path(registry_raw).expanduser().resolve() if registry_raw else None,
+        admin_token,
     )
 
 
-def _register_relay(registry: Path, *, task_id: str) -> tuple[str, Path]:
+def _register_relay_local(registry: Path, *, task_id: str) -> tuple[str, Callable[[], None]]:
     registry.mkdir(parents=True, exist_ok=True)
     os.chmod(registry, 0o700)
     token = secrets.token_hex(32)
@@ -340,7 +350,47 @@ def _register_relay(registry: Path, *, task_id: str) -> tuple[str, Path]:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
-    return token, path
+    return token, lambda: path.unlink(missing_ok=True)
+
+
+def _register_relay_remote(
+    base_url: str,
+    *,
+    admin_token: str,
+    task_id: str,
+) -> tuple[str, Callable[[], None]]:
+    headers = {"Authorization": f"Bearer {admin_token}"}
+    try:
+        response = httpx.post(
+            f"{base_url}/admin/v1/bindings",
+            json={"task_id": task_id},
+            headers=headers,
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPError, json.JSONDecodeError) as exc:
+        raise RuntimeError("remote Daytona relay registration failed") from exc
+    token = payload.get("token") if isinstance(payload, dict) else None
+    if (
+        not isinstance(token, str)
+        or len(token) != 64
+        or any(character not in "0123456789abcdef" for character in token)
+    ):
+        raise RuntimeError("remote Daytona relay returned an invalid binding")
+
+    def release() -> None:
+        try:
+            deleted = httpx.delete(
+                f"{base_url}/admin/v1/bindings/{token}",
+                headers=headers,
+                timeout=30,
+            )
+            deleted.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise RuntimeError("remote Daytona relay binding cleanup failed") from exc
+
+    return token, release
 
 
 def _action_server_command() -> str:
@@ -508,9 +558,11 @@ def prepared_daytona_runtime(
     (
         relay_base_url,
         relay_hostname,
+        relay_port,
         relay_cidrs,
         relay_ipv4,
         relay_registry,
+        relay_admin_token,
     ) = _relay_settings()
     daytona = Daytona()
     sandbox = daytona.create(
@@ -534,9 +586,18 @@ def prepared_daytona_runtime(
         task_id=task_id,
     )
     tunnel: _SshTunnel | None = None
-    relay_path: Path | None = None
+    release_relay: Callable[[], None] | None = None
     try:
-        relay_token, relay_path = _register_relay(relay_registry, task_id=task_id)
+        if relay_admin_token is None:
+            if relay_registry is None:
+                raise RuntimeError("local Daytona relay registry is missing")
+            relay_token, release_relay = _register_relay_local(relay_registry, task_id=task_id)
+        else:
+            relay_token, release_relay = _register_relay_remote(
+                relay_base_url,
+                admin_token=relay_admin_token,
+                task_id=task_id,
+            )
         sandbox.update_network_settings(
             network_allow_list=relay_cidrs,
         )
@@ -547,7 +608,7 @@ def prepared_daytona_runtime(
             relay_ipv4=relay_ipv4,
         )
         submission_url = f"{relay_base_url}/{relay_token}"
-        submission_curl_resolve = f"{relay_hostname}:443:{relay_ipv4}"
+        submission_curl_resolve = f"{relay_hostname}:{relay_port}:{relay_ipv4}"
         rewrite_submit_server(
             workspace,
             source=server,
@@ -592,8 +653,8 @@ def prepared_daytona_runtime(
                 sandbox_id=sandbox_id,
                 task_id=task_id,
             )
-        if relay_path is not None:
-            relay_path.unlink(missing_ok=True)
+        if release_relay is not None:
+            release_relay()
         if tunnel_error is not None:
             raise RuntimeError("Daytona SSH tunnel cleanup failed") from tunnel_error
 
