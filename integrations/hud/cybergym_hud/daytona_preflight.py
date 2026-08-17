@@ -34,7 +34,7 @@ def main() -> None:
             "schema_version": "1",
             "no_model_call": True,
             "image": DAYTONA_IMAGE,
-            "network_policy": "daytona-block-all-plus-private-grader-ssh-forward-v1",
+            "network_policy": "daytona-funnel-host-cidr-allowlist-task-relay-v1",
             "sandbox_id_recorded": bool(runtime.sandbox_id),
         }
     print(json.dumps(result, indent=2, sort_keys=True))

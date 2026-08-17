@@ -21,7 +21,14 @@ from hud.utils.platform import PlatformClient
 from .cleanup import cleanup_tracked_root
 from .contract import validate_contract
 from .env import build_env
-from .native import NativeOpenHandsAgent, NativeOpenHandsBatchAgent, NativeOpenHandsConfig
+from .native import (
+    CAMPAIGN_RUNTIME_MEMORY_BYTES,
+    CAMPAIGN_RUNTIME_MEMORY_SWAP_BYTES,
+    CAMPAIGN_RUNTIME_NANO_CPUS,
+    NativeOpenHandsAgent,
+    NativeOpenHandsBatchAgent,
+    NativeOpenHandsConfig,
+)
 from .openhands_trace import (
     TraceImportError,
     validate_remote_evaluation_receipt,
@@ -498,6 +505,17 @@ def main() -> None:
         execution_backend=args.execution_backend,
         daytona_ledger_path=args.daytona_ledger,
         daytona_known_hosts=args.daytona_known_hosts,
+        runtime_nano_cpus=(
+            CAMPAIGN_RUNTIME_NANO_CPUS if args.execution_backend == "daytona-private" else None
+        ),
+        runtime_memory_bytes=(
+            CAMPAIGN_RUNTIME_MEMORY_BYTES if args.execution_backend == "daytona-private" else None
+        ),
+        runtime_memory_swap_bytes=(
+            CAMPAIGN_RUNTIME_MEMORY_SWAP_BYTES
+            if args.execution_backend == "daytona-private"
+            else None
+        ),
     )
     if len(selected) == 1:
         result = asyncio.run(run_one(selected[0], config, job_name=args.job_name))
