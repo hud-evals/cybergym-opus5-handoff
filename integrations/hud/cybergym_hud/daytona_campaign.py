@@ -33,7 +33,7 @@ from .native import (
 )
 from .taskset import task_ids as catalog_task_ids
 
-JOB_NAME = "cybergym-claude-opus-5-2"
+JOB_NAME = "cybergym-opus5-cyber"
 MODEL = "claude-opus-5"
 MAX_PRIVATE_FILE_BYTES = 16 * 1024 * 1024
 

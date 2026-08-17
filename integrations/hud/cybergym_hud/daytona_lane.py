@@ -57,7 +57,7 @@ def validate_daytona_contract() -> dict[str, Any]:
         payload.get("schema_version") != "1"
         or payload.get("canonical_native_result") is not False
         or payload.get("merge_with_native_campaign") is not False
-        or payload.get("job_name") != "cybergym-claude-opus-5-2"
+        or payload.get("job_name") != "cybergym-opus5-cyber"
         or payload.get("agent", {}).get("model") != "claude-opus-5"
         or payload.get("agent", {}).get("reasoning_effort") is not None
         or payload.get("runtime", {}).get("image") != DAYTONA_IMAGE

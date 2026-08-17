@@ -3,7 +3,7 @@
   "arm": "cybergym-claude-opus-5-daytona-no-internet-v1",
   "canonical_native_result": false,
   "merge_with_native_campaign": false,
-  "job_name": "cybergym-claude-opus-5-2",
+  "job_name": "cybergym-opus5-cyber",
   "agent": {
     "scaffold": "upstream-openhands-0.33-codeact",
     "openhands_commit": "7656b71d07da6694e262f9c34ea994cd4849c0eb",

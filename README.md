@@ -65,7 +65,7 @@ Start or resume the exact selected Daytona campaign:
 nix run .#daytona-campaign -- --confirm-paid-selection
 ```
 
-The HUD Job name is `cybergym-claude-opus-5-2`. Terminal infrastructure-error
+The HUD Job name is `cybergym-opus5-cyber`. Terminal infrastructure-error
 rows remain pending and are retried only after their remote receipt is
 reconciled. Additional detail is available in
 [`integrations/hud/ANTHROPIC_NIX.md`](integrations/hud/ANTHROPIC_NIX.md).

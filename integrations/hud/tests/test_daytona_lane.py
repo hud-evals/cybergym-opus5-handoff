@@ -54,7 +54,7 @@ def test_configure_attached_runtime_preserves_workspace_and_sets_private_client(
 
 def test_daytona_contract_is_separate_and_noncanonical() -> None:
     contract = validate_daytona_contract()
-    assert contract["job_name"] == "cybergym-claude-opus-5-2"
+    assert contract["job_name"] == "cybergym-opus5-cyber"
     assert contract["agent"]["model"] == "claude-opus-5"
     assert contract["agent"]["reasoning_effort"] is None
     assert contract["accounting"]["retry_policy"] == ("terminal_error_rows_remain_pending_for_exact_automatic_retry")

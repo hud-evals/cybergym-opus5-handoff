@@ -49,7 +49,7 @@ exec "$UV_BIN" run --frozen --no-sync --project "$REPOSITORY_ROOT/integrations/h
   --confirm-paid-selection \
   --continue-after-errors \
   --independent-selection \
-  --job-name cybergym-claude-opus-5-2 \
+  --job-name cybergym-opus5-cyber \
   --repository-root "$REPOSITORY_ROOT" \
   --data-dir "$DATA_DIR" \
   --server "$SERVER_URL" \
