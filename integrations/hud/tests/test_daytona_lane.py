@@ -188,6 +188,35 @@ def test_daytona_ledger_is_private_append_only_and_task_bound(tmp_path: Path) ->
     assert open_sandbox_bindings(ledger) == {}
 
 
+def test_daytona_volume_ledger_rewrites_under_explicit_private_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    volume = tmp_path / "artifacts"
+    volume.mkdir()
+    monkeypatch.setenv("CG_DAYTONA_ARTIFACT_VOLUME_ROOT", str(volume))
+    ledger = volume / "sandboxes.jsonl"
+
+    record_sandbox_event(
+        ledger,
+        event="created",
+        sandbox_id="sandbox-volume",
+        task_id="arvo:10013",
+    )
+    record_sandbox_event(
+        ledger,
+        event="deleted",
+        sandbox_id="sandbox-volume",
+        task_id="arvo:10013",
+    )
+
+    assert [json.loads(line)["event"] for line in ledger.read_text().splitlines()] == [
+        "created",
+        "deleted",
+    ]
+    assert open_sandbox_bindings(ledger) == {}
+
+
 def test_daytona_ledger_reconcile_deletes_only_exact_lane_sandbox(tmp_path: Path) -> None:
     ledger = tmp_path / "sandboxes.jsonl"
     record_sandbox_event(

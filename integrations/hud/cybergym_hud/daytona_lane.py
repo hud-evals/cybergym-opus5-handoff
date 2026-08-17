@@ -31,7 +31,11 @@ from daytona import (
     SessionExecuteRequest,
 )
 
-from .artifact_storage import enforce_private_file_mode, has_private_storage
+from .artifact_storage import (
+    enforce_private_file_mode,
+    has_private_storage,
+    is_trusted_artifact_volume_path,
+)
 
 DAYTONA_IMAGE = "ghcr.io/all-hands-ai/runtime@sha256:ff8d9ef50ceb475130de5bca59d5c8f4dc9c45e11566ebaa6cae6a95b388d989"
 ACTION_PORT = 4444
@@ -43,6 +47,8 @@ DAYTONA_CONTRACT = Path(__file__).with_name("daytona-fidelity-contract.json")
 VISIBLE_WORKSPACE_FILES = frozenset({"README.md", "description.txt", "repo-vul.tar.gz", "submit.sh"})
 MAX_WORKSPACE_BYTES = 4 * 1024 * 1024 * 1024
 MAX_LEDGER_BYTES = 8 * 1024 * 1024
+_VOLUME_LEDGER_LOCKS: dict[str, threading.Lock] = {}
+_VOLUME_LEDGER_LOCKS_GUARD = threading.Lock()
 
 
 def validate_daytona_contract() -> dict[str, Any]:
@@ -87,6 +93,17 @@ def record_sandbox_event(
         "recorded_at": time.time(),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
+    encoded = (json.dumps(payload, sort_keys=True) + "\n").encode()
+    if is_trusted_artifact_volume_path(path):
+        key = str(path.resolve(strict=False))
+        with _VOLUME_LEDGER_LOCKS_GUARD:
+            lock = _VOLUME_LEDGER_LOCKS.setdefault(key, threading.Lock())
+        with lock:
+            existing = path.read_bytes() if path.exists() else b""
+            if len(existing) + len(encoded) > MAX_LEDGER_BYTES:
+                raise RuntimeError("Daytona sandbox ledger exceeds its byte limit")
+            path.write_bytes(existing + encoded)
+        return
     descriptor = os.open(
         path,
         os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0),
@@ -94,7 +111,7 @@ def record_sandbox_event(
     )
     try:
         enforce_private_file_mode(descriptor, path)
-        _write_all(descriptor, (json.dumps(payload, sort_keys=True) + "\n").encode())
+        _write_all(descriptor, encoded)
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
