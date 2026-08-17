@@ -313,6 +313,15 @@ def test_openhands_subprocess_proxy_uses_private_daytona_attachment(
     def fake_runtime(**kwargs):
         assert kwargs["task_id"] == "arvo:10013"
         assert kwargs["server"] == "http://172.30.0.1:8666"
+        assert kwargs["workspace"] == workspace
+        from cybergym_hud.daytona_lane import rewrite_submit_server
+
+        rewrite_submit_server(
+            workspace,
+            source=kwargs["server"],
+            replacement="https://relay.example/token",
+            curl_resolve="relay.example:443:203.0.113.10",
+        )
         yield SimpleNamespace(
             action_url="http://127.0.0.1:43210",
             submission_url="https://relay.example/token",

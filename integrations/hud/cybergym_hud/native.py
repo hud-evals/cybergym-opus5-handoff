@@ -380,7 +380,6 @@ class _OpenHandsSubprocessProxy:
                 from .daytona_lane import (
                     configure_attached_runtime,
                     prepared_daytona_runtime,
-                    rewrite_submit_server,
                 )
 
                 workspace = configure_attached_runtime(config_path)
@@ -389,13 +388,8 @@ class _OpenHandsSubprocessProxy:
                     server=self._server,
                     ledger_path=self._daytona_ledger_path,
                     known_hosts=self._daytona_known_hosts,
+                    workspace=workspace,
                 ) as runtime:
-                    rewrite_submit_server(
-                        workspace,
-                        source=self._server,
-                        replacement=runtime.submission_url,
-                        curl_resolve=runtime.submission_curl_resolve,
-                    )
                     child_env["CYBERGYM_DAYTONA_ACTION_URL"] = runtime.action_url
                     kwargs["env"] = child_env
                     private_log_root = Path(child_env["LOG_DIR"]).parent

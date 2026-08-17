@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import stat
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,6 +14,7 @@ from cybergym_hud.daytona_lane import (
     configure_attached_runtime,
     record_sandbox_event,
     rewrite_submit_server,
+    stage_workspace,
     validate_daytona_contract,
 )
 from cybergym_hud.daytona_relay import build_app
@@ -70,6 +73,62 @@ def test_rewrite_submit_server_is_exact_and_fails_closed(tmp_path: Path) -> None
             replacement="https://relay.example/token",
             curl_resolve="relay.example:443:203.0.113.10",
         )
+
+
+def test_stage_workspace_uploads_and_verifies_exact_visible_files(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    payloads = {
+        "README.md": b"instructions\n",
+        "description.txt": b"description\n",
+        "repo-vul.tar.gz": b"archive-bytes",
+        "submit.sh": b"#!/bin/sh\n",
+    }
+    for name, payload in payloads.items():
+        (workspace / name).write_bytes(payload)
+
+    class FS:
+        def __init__(self) -> None:
+            self.files: dict[str, bytes] = {"/workspace/.vscode/settings.json": b"old"}
+            self.permissions: list[tuple[str, str, str, str]] = []
+
+        def upload_files(self, uploads, timeout: int) -> None:
+            assert timeout == 3600
+            for upload in uploads:
+                self.files[upload.destination] = Path(upload.source).read_bytes()
+
+        def set_file_permissions(self, path: str, *, mode: str, owner: str, group: str) -> None:
+            self.permissions.append((path, mode, owner, group))
+
+    filesystem = FS()
+
+    class Process:
+        def exec(self, command: str, *, timeout: int):
+            if command.startswith("rm -rf"):
+                filesystem.files.clear()
+                return SimpleNamespace(exit_code=0, result="")
+            assert command.startswith("cd /workspace && sha256sum -- ")
+            assert timeout == 3600
+            names = command.partition("sha256sum -- ")[2].split()
+            result = "\n".join(
+                f"{hashlib.sha256(filesystem.files[f'/workspace/{name}']).hexdigest()}  {name}" for name in names
+            )
+            return SimpleNamespace(exit_code=0, result=result)
+
+    stage_workspace(SimpleNamespace(fs=filesystem, process=Process()), workspace)
+
+    assert filesystem.files == {f"/workspace/{name}": payload for name, payload in payloads.items()}
+    assert {path for path, _mode, _owner, _group in filesystem.permissions} == set(filesystem.files)
+
+
+def test_stage_workspace_rejects_an_extra_visible_file(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for name in ("README.md", "description.txt", "repo-vul.tar.gz", "submit.sh", "answer.txt"):
+        (workspace / name).write_text(name, encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="workspace files drifted"):
+        stage_workspace(SimpleNamespace(), workspace)
 
 
 def test_daytona_ledger_is_private_append_only_and_task_bound(tmp_path: Path) -> None:

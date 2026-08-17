@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import ipaddress
 import json
 import os
@@ -24,6 +25,7 @@ from daytona import (
     CreateSandboxFromImageParams,
     Daytona,
     DaytonaNotFoundError,
+    FileUpload,
     Image,
     Resources,
     SessionExecuteRequest,
@@ -36,6 +38,8 @@ SSH_HOST = "ssh.app.daytona.io"
 RUNTIME_CLASS = "cybergym_daytona_attached_runtime.CyberGymDaytonaAttachedRuntime"
 LEDGER_SCHEMA = "cybergym.daytona-sandbox-ledger.v1"
 DAYTONA_CONTRACT = Path(__file__).with_name("daytona-fidelity-contract.json")
+VISIBLE_WORKSPACE_FILES = frozenset({"README.md", "description.txt", "repo-vul.tar.gz", "submit.sh"})
+MAX_WORKSPACE_BYTES = 4 * 1024 * 1024 * 1024
 
 
 def validate_daytona_contract() -> dict[str, Any]:
@@ -47,7 +51,7 @@ def validate_daytona_contract() -> dict[str, Any]:
         or payload.get("job_name") != "cybergym-gpt5.6-sol-2"
         or payload.get("runtime", {}).get("image") != DAYTONA_IMAGE
         or payload.get("runtime", {}).get("network")
-        != "host_cidr_allowlist_plus_tls_resolve_task_relay_only_after_action_server_and_ssh_tunnel"
+        != "host_cidr_allowlist_plus_tls_resolve_before_workspace_stage_and_action_server"
     ):
         raise RuntimeError("CyberGym Daytona fidelity contract drifted")
     return payload
@@ -310,6 +314,67 @@ def _delete_exact(daytona: Daytona, sandbox: Any) -> None:
         time.sleep(1)
 
 
+def _hash_regular_file(path: Path) -> tuple[int, int, str]:
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode):
+        raise RuntimeError(f"Daytona workspace source is not a regular file: {path.name}")
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    after = path.lstat()
+    if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+    ):
+        raise RuntimeError(f"Daytona workspace source changed while hashing: {path.name}")
+    return stat.S_IMODE(before.st_mode), before.st_size, digest.hexdigest()
+
+
+def stage_workspace(sandbox: Any, workspace: Path) -> None:
+    """Upload and verify the exact visible CyberGym task workspace."""
+
+    root = workspace.lstat()
+    if not stat.S_ISDIR(root.st_mode):
+        raise RuntimeError("Daytona workspace source is not a directory")
+    entries = {path.name: path for path in workspace.iterdir()}
+    if set(entries) != VISIBLE_WORKSPACE_FILES:
+        raise RuntimeError(f"Daytona workspace files drifted: {sorted(entries)}")
+    receipts = {name: _hash_regular_file(entries[name]) for name in sorted(entries)}
+    if sum(size for _mode, size, _digest in receipts.values()) > MAX_WORKSPACE_BYTES:
+        raise RuntimeError("Daytona workspace exceeds the staged byte limit")
+
+    reset = sandbox.process.exec("rm -rf -- /workspace && install -d -m 0755 /workspace", timeout=60)
+    if reset.exit_code != 0:
+        raise RuntimeError("could not reset the ephemeral Daytona workspace")
+    sandbox.fs.upload_files(
+        [FileUpload(str(entries[name]), f"/workspace/{name}") for name in sorted(VISIBLE_WORKSPACE_FILES)],
+        timeout=3600,
+    )
+    for name, (mode, _size, _digest) in receipts.items():
+        sandbox.fs.set_file_permissions(
+            f"/workspace/{name}",
+            mode=f"{mode:04o}",
+            owner="root",
+            group="root",
+        )
+    command = "cd /workspace && sha256sum -- " + " ".join(sorted(VISIBLE_WORKSPACE_FILES))
+    verified = sandbox.process.exec(command, timeout=3600)
+    if verified.exit_code != 0:
+        raise RuntimeError("could not verify the staged Daytona workspace")
+    observed: dict[str, str] = {}
+    for line in verified.result.splitlines():
+        digest, separator, name = line.partition("  ")
+        if not separator or name in observed:
+            raise RuntimeError("Daytona workspace digest output was malformed")
+        observed[name] = digest
+    expected = {name: digest for name, (_mode, _size, digest) in receipts.items()}
+    if observed != expected:
+        raise RuntimeError("Daytona workspace upload did not preserve exact bytes")
+
+
 @contextmanager
 def prepared_daytona_runtime(
     *,
@@ -317,6 +382,7 @@ def prepared_daytona_runtime(
     server: str,
     ledger_path: Path,
     known_hosts: Path,
+    workspace: Path,
 ) -> Iterator[DaytonaPreparedRuntime]:
     """Create and prove one private Daytona OpenHands runtime, then delete it."""
 
@@ -360,6 +426,24 @@ def prepared_daytona_runtime(
     relay_path: Path | None = None
     try:
         relay_token, relay_path = _register_relay(relay_registry, task_id=task_id)
+        sandbox.update_network_settings(
+            network_allow_list=relay_cidrs,
+        )
+        _require_blocked_network(
+            sandbox,
+            relay_base_url=relay_base_url,
+            relay_hostname=relay_hostname,
+            relay_ipv4=relay_ipv4,
+        )
+        submission_url = f"{relay_base_url}/{relay_token}"
+        submission_curl_resolve = f"{relay_hostname}:443:{relay_ipv4}"
+        rewrite_submit_server(
+            workspace,
+            source=server,
+            replacement=submission_url,
+            curl_resolve=submission_curl_resolve,
+        )
+        stage_workspace(sandbox, workspace)
         sandbox.process.create_session("openhands-action-server")
         sandbox.process.execute_session_command(
             "openhands-action-server",
@@ -375,20 +459,10 @@ def prepared_daytona_runtime(
             raise RuntimeError("Daytona SSH tunnel omitted its action port")
         action_url = f"http://127.0.0.1:{tunnel.action_local_port}"
         _wait_action_server(action_url)
-        sandbox.update_network_settings(
-            network_allow_list=relay_cidrs,
-        )
-        _require_blocked_network(
-            sandbox,
-            relay_base_url=relay_base_url,
-            relay_hostname=relay_hostname,
-            relay_ipv4=relay_ipv4,
-        )
-        _wait_action_server(action_url)
         yield DaytonaPreparedRuntime(
             action_url=action_url,
-            submission_url=f"{relay_base_url}/{relay_token}",
-            submission_curl_resolve=f"{relay_hostname}:443:{relay_ipv4}",
+            submission_url=submission_url,
+            submission_curl_resolve=submission_curl_resolve,
             sandbox_id=sandbox_id,
         )
     finally:
