@@ -899,6 +899,63 @@ def test_site_install_rejects_missing_private_runtime_network(monkeypatch: pytes
         compat.install()
 
 
+def test_site_install_accepts_attached_daytona_without_docker_patch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compat = _load()
+    llm = SimpleNamespace(
+        FUNCTION_CALLING_SUPPORTED_MODELS=[],
+        REASONING_EFFORT_SUPPORTED_MODELS=[],
+        MODELS_WITHOUT_STOP_WORDS=[],
+    )
+    async_llm = SimpleNamespace()
+    package = ModuleType("openhands.llm")
+    package.llm = llm
+    package.async_llm = async_llm
+    monkeypatch.setitem(sys.modules, "openhands.llm", package)
+    monkeypatch.setenv("CYBERGYM_REASONING_EFFORT", "xhigh")
+    monkeypatch.delenv("CYBERGYM_RUNTIME_NETWORK", raising=False)
+    monkeypatch.setenv("CYBERGYM_DAYTONA_ACTION_URL", "http://127.0.0.1:43210")
+    patched = []
+    monkeypatch.setattr(compat, "_patch_llm_instances", lambda *_args: patched.append("sync"))
+    monkeypatch.setattr(compat, "_patch_async_llm_instances", lambda *_args: patched.append("async"))
+
+    assert compat.install() is True
+    assert patched == ["sync", "async"]
+
+
+@pytest.mark.parametrize(
+    "action_url",
+    [
+        "https://127.0.0.1:43210",
+        "http://127.0.0.1:43210/path",
+        "http://127.0.0.1:43210.example",
+        "http://localhost:43210",
+        "http://127.0.0.1:65536",
+    ],
+)
+def test_site_install_rejects_nonexact_daytona_action_url(
+    monkeypatch: pytest.MonkeyPatch,
+    action_url: str,
+) -> None:
+    compat = _load()
+    monkeypatch.setenv("CYBERGYM_REASONING_EFFORT", "xhigh")
+    monkeypatch.delenv("CYBERGYM_RUNTIME_NETWORK", raising=False)
+    monkeypatch.setenv("CYBERGYM_DAYTONA_ACTION_URL", action_url)
+
+    with pytest.raises(RuntimeError, match="exact loopback HTTP origin"):
+        compat.install()
+
+
+def test_site_install_rejects_multiple_runtime_backends(monkeypatch: pytest.MonkeyPatch) -> None:
+    compat = _load()
+    monkeypatch.setenv("CYBERGYM_RUNTIME_NETWORK", "cybergym-no-internet")
+    monkeypatch.setenv("CYBERGYM_DAYTONA_ACTION_URL", "http://127.0.0.1:43210")
+
+    with pytest.raises(RuntimeError, match="cannot select Docker and Daytona"):
+        compat.install()
+
+
 def test_private_runtime_patch_rejects_an_extra_network_attachment() -> None:
     compat = _load()
 

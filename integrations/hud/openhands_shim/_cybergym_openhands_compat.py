@@ -22,11 +22,13 @@ TARGET_MODELS = frozenset({"gpt-5.6-sol", "openai/gpt-5.6-sol"})
 API_MODEL = "gpt-5.6-sol"
 EFFORT_ENV = "CYBERGYM_REASONING_EFFORT"
 RUNTIME_NETWORK_ENV = "CYBERGYM_RUNTIME_NETWORK"
+DAYTONA_ACTION_URL_ENV = "CYBERGYM_DAYTONA_ACTION_URL"
 SUPPORTED_EFFORT = "xhigh"
 SUPPORTED_RUNTIME_NETWORK = "cybergym-no-internet"
 SUPPORTED_RUNTIME_SUBNET = ipaddress.ip_network("172.30.0.0/24")
 SUPPORTED_RUNTIME_GATEWAY = ipaddress.ip_address("172.30.0.1")
 SERVED_MODEL_PATTERN = re.compile(r"^gpt-5\.6-sol(?:-\d{4}-\d{2}-\d{2})?$")
+DAYTONA_ACTION_URL_PATTERN = re.compile(r"^http://127\.0\.0\.1:([1-9][0-9]{0,4})$")
 STANDARD_INPUT_USD_PER_TOKEN = 5.0 / 1_000_000
 STANDARD_CACHED_INPUT_USD_PER_TOKEN = 0.5 / 1_000_000
 STANDARD_OUTPUT_USD_PER_TOKEN = 30.0 / 1_000_000
@@ -711,14 +713,25 @@ def install() -> bool:
 
     effort = os.environ.get(EFFORT_ENV)
     runtime_network = os.environ.get(RUNTIME_NETWORK_ENV)
-    if effort is None and runtime_network is None:
+    daytona_action_url = os.environ.get(DAYTONA_ACTION_URL_ENV)
+    if effort is None and runtime_network is None and daytona_action_url is None:
         return False
-    if runtime_network != SUPPORTED_RUNTIME_NETWORK:
-        raise RuntimeError(f"{RUNTIME_NETWORK_ENV} must be {SUPPORTED_RUNTIME_NETWORK!r}; got {runtime_network!r}")
+    if runtime_network is not None and daytona_action_url is not None:
+        raise RuntimeError("CyberGym OpenHands child cannot select Docker and Daytona runtimes together")
+    daytona_attached = False
+    if daytona_action_url is not None:
+        match = DAYTONA_ACTION_URL_PATTERN.fullmatch(daytona_action_url)
+        if match is None or int(match.group(1)) > 65535:
+            raise RuntimeError(f"{DAYTONA_ACTION_URL_ENV} must be an exact loopback HTTP origin")
+        daytona_attached = True
+    if runtime_network is not None:
+        if runtime_network != SUPPORTED_RUNTIME_NETWORK:
+            raise RuntimeError(f"{RUNTIME_NETWORK_ENV} must be {SUPPORTED_RUNTIME_NETWORK!r}; got {runtime_network!r}")
+        from openhands.runtime.impl.docker import docker_runtime
 
-    from openhands.runtime.impl.docker import docker_runtime
-
-    _patch_docker_runtime(docker_runtime, runtime_network)
+        _patch_docker_runtime(docker_runtime, runtime_network)
+    elif not daytona_attached:
+        raise RuntimeError(f"either {RUNTIME_NETWORK_ENV} or a loopback-only {DAYTONA_ACTION_URL_ENV} is required")
     if effort is None:
         return True
     if effort != SUPPORTED_EFFORT:
