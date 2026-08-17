@@ -63,6 +63,7 @@ def _config(tmp_path: Path) -> NativeOpenHandsConfig:
         tmp_dir=tmp_path / "results/tmp",
         max_iter=200,
         timeout=3600,
+        max_output_tokens=8192,
         silent=True,
         runtime_nano_cpus=4_000_000_000,
         runtime_memory_bytes=8 * 1024**3,

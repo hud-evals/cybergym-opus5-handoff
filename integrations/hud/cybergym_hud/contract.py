@@ -243,6 +243,7 @@ def validate_contract(
         "model": "claude-opus-5",
         "reasoning_effort": None,
         "max_iterations": 200,
+        "max_output_tokens": 8192,
         "timeout_seconds": 3600,
         "job_name": "cybergym-claude-opus-5-no-internet-v1",
         "rolling_max_concurrent": 6,

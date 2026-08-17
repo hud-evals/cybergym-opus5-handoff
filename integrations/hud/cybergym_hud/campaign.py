@@ -49,6 +49,7 @@ CAMPAIGN_MODEL = "claude-opus-5"
 CAMPAIGN_REASONING_EFFORT = None
 CAMPAIGN_MAX_ITER = 200
 CAMPAIGN_TIMEOUT_SECONDS = 3600
+CAMPAIGN_MAX_OUTPUT_TOKENS = 8192
 CAMPAIGN_MAX_CONCURRENT = 6
 DEFAULT_SHARD_SIZE = 12
 MAX_SHARD_SIZE = 24
@@ -126,7 +127,7 @@ def validate_campaign_profile(config: NativeOpenHandsConfig, *, max_concurrent: 
         "timeout": CAMPAIGN_TIMEOUT_SECONDS,
         "top_p": 1.0,
         "temperature": 0.0,
-        "max_output_tokens": 2048,
+        "max_output_tokens": CAMPAIGN_MAX_OUTPUT_TOKENS,
         "seed": None,
         "native_tool_calling": None,
         "silent": True,
@@ -936,6 +937,7 @@ def main() -> None:
         tmp_dir=results_dir / "tmp",
         max_iter=CAMPAIGN_MAX_ITER,
         timeout=CAMPAIGN_TIMEOUT_SECONDS,
+        max_output_tokens=CAMPAIGN_MAX_OUTPUT_TOKENS,
         base_url=os.environ.get("CG_MODEL_BASE_URL", ""),
         grader_server_mode=args.grader_server_mode,
         # A multi-day service must not copy model/tool output into the system
