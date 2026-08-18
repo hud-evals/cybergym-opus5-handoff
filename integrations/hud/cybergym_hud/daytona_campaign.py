@@ -169,13 +169,16 @@ def _require_canonical_quiescent() -> None:
     if docker.stdout.strip():
         raise CampaignBlocked("canonical OpenHands containers remain during Daytona handoff")
     processes = subprocess.run(
-        ["/usr/bin/pgrep", "-f", "openhands.core.main"],
+        ["/usr/bin/pgrep", "-af", "openhands.core.main"],
         check=False,
         capture_output=True,
         text=True,
         timeout=15,
     )
-    if processes.returncode not in {0, 1} or processes.stdout.strip():
+    canonical_processes = [
+        line for line in processes.stdout.splitlines() if "/srv/cybergym/cybergym-og-fidelity-hud/" in line
+    ]
+    if processes.returncode not in {0, 1} or canonical_processes:
         raise CampaignBlocked("canonical OpenHands controller processes remain during Daytona handoff")
 
 

@@ -111,6 +111,42 @@ def test_independent_daytona_campaign_requires_canonical_quiescence(
         _require_canonical_quiescent()
 
 
+def test_canonical_quiescence_allows_sibling_daytona_processes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    properties = {"ActiveState": "inactive", "MainPID": "0", "UnitFileState": "disabled"}
+    monkeypatch.setattr(
+        "cybergym_hud.daytona_campaign._service_property",
+        lambda name: properties[name],
+    )
+    responses = iter(
+        (
+            SimpleNamespace(returncode=0, stdout=""),
+            SimpleNamespace(
+                returncode=0,
+                stdout="123 /srv/cybergym-daytona-lane/openhands.core.main\n",
+            ),
+        )
+    )
+    monkeypatch.setattr(
+        "cybergym_hud.daytona_campaign.subprocess.run",
+        lambda *_args, **_kwargs: next(responses),
+    )
+    _require_canonical_quiescent()
+
+    responses = iter(
+        (
+            SimpleNamespace(returncode=0, stdout=""),
+            SimpleNamespace(
+                returncode=0,
+                stdout="456 /srv/cybergym/cybergym-og-fidelity-hud/openhands.core.main\n",
+            ),
+        )
+    )
+    with pytest.raises(CampaignBlocked, match="canonical OpenHands controller"):
+        _require_canonical_quiescent()
+
+
 def test_rewrite_submit_server_is_exact_and_fails_closed(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()

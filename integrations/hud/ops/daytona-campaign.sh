@@ -17,6 +17,7 @@ DAYTONA_REPORT=${CG_DAYTONA_PREFLIGHT_REPORT:-$RESULTS_DIR/daytona-anthropic/pre
 KNOWN_HOSTS=${CG_DAYTONA_KNOWN_HOSTS:-$REPOSITORY_ROOT/integrations/hud/daytona_known_hosts.txt}
 MAX_CONCURRENT=${CG_DAYTONA_MAX_CONCURRENT:-60}
 SHARD_SIZE=${CG_DAYTONA_SHARD_SIZE:-60}
+JOB_NAME=${CG_DAYTONA_JOB_NAME:-cybergym-opus5-cyber}
 UV_BIN=${CG_UV_BIN:-uv}
 CONFIRM=0
 
@@ -43,13 +44,17 @@ for value in "$DATA_DIR" "$SERVER_URL" "$RESULTS_DIR" "$TASK_FILE" "$ARTIFACT_RE
 done
 [ "${CG_MODEL:-claude-opus-5}" = claude-opus-5 ] || { printf '%s\n' 'daytona-campaign: model arm drifted' >&2; exit 1; }
 [ -z "${CG_REASONING_EFFORT-}" ] || { printf '%s\n' 'daytona-campaign: reasoning arm drifted' >&2; exit 1; }
+case "$JOB_NAME" in
+  cybergym-opus5-cyber|cybergym-opus5-cyber-lane-[0-9][0-9][0-9]) ;;
+  *) printf '%s\n' 'daytona-campaign: HUD Job name drifted' >&2; exit 1 ;;
+esac
 
 exec "$UV_BIN" run --frozen --no-sync --project "$REPOSITORY_ROOT/integrations/hud" \
   cybergym-hud-campaign-daytona \
   --confirm-paid-selection \
   --continue-after-errors \
   --independent-selection \
-  --job-name cybergym-opus5-cyber \
+  --job-name "$JOB_NAME" \
   --repository-root "$REPOSITORY_ROOT" \
   --data-dir "$DATA_DIR" \
   --server "$SERVER_URL" \

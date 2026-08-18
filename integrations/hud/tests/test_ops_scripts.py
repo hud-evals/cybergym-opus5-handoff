@@ -18,6 +18,7 @@ SCRIPTS = tuple(
         "install-campaign-service.sh",
         "daytona-preflight.sh",
         "daytona-campaign.sh",
+        "daytona-lane.sh",
         "server.sh",
         "cybergym-ops",
     )
@@ -212,6 +213,19 @@ def test_campaign_profile_resume_and_secret_boundaries_are_explicit() -> None:
     assert "campaign-claude-opus-5-200-no-internet-v1" in preflight
     assert "campaign-preflight" in dispatcher
     assert 'exec "$SCRIPT_DIR/campaign.sh"' in dispatcher
+
+
+def test_daytona_multilane_runner_is_opus5_and_lane_scoped() -> None:
+    campaign = (OPS / "daytona-campaign.sh").read_text(encoding="utf-8")
+    lane = (OPS / "daytona-lane.sh").read_text(encoding="utf-8")
+    assert "CG_DAYTONA_JOB_NAME" in campaign
+    assert "model arm drifted" in campaign
+    assert '"$JOB_NAME"' in campaign
+    assert "cybergym-opus5-cyber-lane-" in lane
+    assert "CG_DAYTONA_PLAN_DIR" in lane
+    assert "CG_DAYTONA_TASK_FILE" in lane
+    assert "CG_RESULTS_DIR" in lane
+    assert "ANTHROPIC_API_KEY" not in lane
 
 
 def test_campaign_service_uses_a_deterministic_operator_path() -> None:

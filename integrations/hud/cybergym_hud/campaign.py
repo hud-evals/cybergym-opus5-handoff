@@ -537,12 +537,14 @@ async def require_remote_trace_events(
     """Require telemetry events for an already-validated subset of job rows."""
 
     client = client or PlatformClient.from_settings()
-    missing: list[str] = []
+    # A terminal row with missing or malformed projection events is a
+    # task-scoped infrastructure failure. Reconciliation preserves valid
+    # sibling rows and retries only this trace. HUD transport failures still
+    # propagate from client.aget.
     grader_errors: set[str] = set()
     for row in trace_rows:
         trace_id = str(row["id"])
         observed = False
-        last_problem = "no events"
         for attempt in range(31):
             data = await client.aget(f"/trace/{trace_id}/events")
             events = data.get("events", []) if isinstance(data, dict) else []
@@ -553,14 +555,12 @@ async def require_remote_trace_events(
                         grader_errors.add(_uuid_key(trace_id))
                     observed = True
                     break
-                except TraceImportError as exc:
-                    last_problem = str(exc)
+                except TraceImportError:
+                    pass
             if attempt < 30:
                 await asyncio.sleep(2.0)
         if not observed:
-            missing.append(f"{trace_id} ({last_problem})")
-    if missing:
-        raise CampaignBlocked("HUD terminal receipts lack remotely readable telemetry events: " + ", ".join(missing))
+            grader_errors.add(_uuid_key(trace_id))
     return grader_errors
 
 

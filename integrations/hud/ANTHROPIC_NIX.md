@@ -44,3 +44,30 @@ The model arm and HUD Job identity are fixed to direct `claude-opus-5` and
 coordinator. The task runtime has no public IP/DNS egress and can reach only
 the task-scoped submission relay. Terminal infrastructure-error rows remain
 pending for exact automatic retry after their remote receipt is reconciled.
+
+## Horizontal Daytona lanes
+
+For higher throughput, partition one private catalog-ordered task file into
+disjoint lanes. The planner writes mode-0600 task files plus an exact union and
+SHA-256 manifest:
+
+```sh
+nix run .#daytona-plan -- \
+  --task-file "$CG_DAYTONA_TASK_FILE" \
+  --output-dir /srv/cybergym/results/opus5-lanes \
+  --lanes 26 \
+  --max-concurrent 35
+```
+
+Run each lane on a separate trusted Linux coordinator. For lane 1:
+
+```sh
+export CG_DAYTONA_PLAN_DIR=/srv/cybergym/results/opus5-lanes
+export CG_RESULTS_DIR=/srv/cybergym/results/opus5-multilane
+nix run .#daytona-lane -- --lane 1 --confirm-paid-selection
+```
+
+Repeat with lane numbers 2 through 26. Each HUD Job is named
+`cybergym-opus5-cyber-lane-NNN`, while the runtime remains direct
+`claude-opus-5`, private Daytona, and no-public-egress. A lane may restart from
+its own durable state directory; never point two coordinators at the same lane.

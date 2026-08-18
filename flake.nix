@@ -116,6 +116,8 @@
           campaign = mkDispatcherApp pkgs "campaign" "campaign";
           daytona-preflight = mkDispatcherApp pkgs "daytona-preflight" "daytona-preflight";
           daytona-campaign = mkDispatcherApp pkgs "daytona-campaign" "daytona-campaign";
+          daytona-plan = mkOperatorApp pkgs "daytona-plan" "integrations/hud/ops/plan-daytona-lanes.py";
+          daytona-lane = mkOperatorApp pkgs "daytona-lane" "integrations/hud/ops/daytona-lane.sh";
           reconcile = mkOperatorApp pkgs "reconcile" "integrations/hud/ops/reconcile.sh";
         }
       );

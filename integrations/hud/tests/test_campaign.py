@@ -485,6 +485,48 @@ async def test_restart_halts_on_completed_trace_with_remote_grader_error(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_restart_preserves_siblings_and_retries_invalid_remote_projection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    ids = ("arvo:1", "arvo:2")
+    state = CampaignState(tmp_path / "state")
+    state.state_dir.mkdir(mode=0o700)
+    state.initialize(identity=_campaign_identity(config, ids, 2), task_ids=ids, shard_size=2)
+    attempt_number = state.start_attempt(
+        0,
+        job=SimpleNamespace(id="job-1", name=CAMPAIGN_JOB_NAME),
+        task_ids=ids,
+        max_concurrent=2,
+    )
+    for task_id in ids:
+        state.mark_launched(0, attempt_number, task_id)
+
+    class Client:
+        async def aget(self, path, *, params=None):
+            if path == "/trace/trace-1/events":
+                return {"events": _remote_projected_events()}
+            if path == "/trace/trace-2/events":
+                return {
+                    "events": [event for event in _remote_projected_events() if event.get("kind") != "agent_message"]
+                }
+            return [
+                {"id": "trace-1", "task_slug": "arvo-1", "status": "completed", "reward": 0.0},
+                {"id": "trace-2", "task_slug": "arvo-2", "status": "completed", "reward": 0.0},
+            ]
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr("cybergym_hud.campaign.asyncio.sleep", no_sleep)
+    await reconcile_running_attempt(state, 0, state.shard(0)["attempts"][0], client=Client())
+    assert state.shard(0)["completed_task_ids"] == ["arvo:1"]
+    assert state.pending_task_ids(0) == ("arvo:2",)
+    assert state.payload["halt"]["job_id"] == "job-1"
+
+
+@pytest.mark.asyncio
 async def test_restart_blocks_instead_of_repeating_a_launched_task_without_receipt(tmp_path: Path) -> None:
     config = _config(tmp_path)
     ids = ("arvo:1",)
