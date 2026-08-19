@@ -187,6 +187,40 @@ def test_lock_refuses_a_second_campaign_process(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_campaign_pause_request_stops_before_the_next_paid_shard(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    ids = ("arvo:1", "arvo:2")
+    monkeypatch.setattr("cybergym_hud.campaign.catalog_task_ids", lambda _root: ids)
+    monkeypatch.setattr("cybergym_hud.campaign.validate_contract", lambda **_kwargs: None)
+    pause = tmp_path / "state" / "pause.requested"
+    pause.parent.mkdir()
+    pause.write_bytes(b"pause-after-current-shard-v1\n")
+    pause.chmod(0o600)
+
+    async def no_job(*_args, **_kwargs):
+        pytest.fail("pause request allowed a HUD Job to start")
+
+    summary = await run_campaign(
+        config,
+        state_dir=tmp_path / "state",
+        max_concurrent=1,
+        shard_size=1,
+        confirm_paid_all=True,
+        artifact_fingerprints={},
+        selected_task_ids=ids,
+        job_factory=no_job,
+        pause_file=pause,
+    )
+
+    assert summary["paused"] is True
+    assert summary["completed_task_count"] == 0
+    assert summary["complete"] is False
+
+
+@pytest.mark.asyncio
 async def test_campaign_checkpoints_small_named_jobs_and_restart_skips_paid_tasks(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

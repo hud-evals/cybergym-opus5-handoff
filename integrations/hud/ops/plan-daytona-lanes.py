@@ -84,8 +84,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task-file", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--lanes", type=int, required=True)
-    parser.add_argument("--max-concurrent", type=int, default=35)
+    parser.add_argument("--lanes", type=int, default=24)
+    parser.add_argument("--max-concurrent", type=int, default=8)
     return parser.parse_args()
 
 

@@ -29,12 +29,22 @@ nix run .#setup
 sudo -E nix run .#configure
 sudo integrations/hud/ops/install-service.sh
 nix run .#preflight
+nix run .#daytona-ready
 ```
 
 `configure` privately prompts for `HUD_API_KEY`, `ANTHROPIC_API_KEY`, and
 `DAYTONA_API_KEY`. It stores protected environment files under
 `/etc/cybergym`; no secret should be committed, passed in argv, or written to
 shell history.
+
+On an already provisioned CyberGym host, refresh only those three keys without
+rotating the internal grader/relay credential or replacing non-secret runtime
+settings:
+
+```bash
+sudo -E nix run .#update-keys
+nix run .#daytona-ready
+```
 
 For Daytona, add the deployment-specific non-secret task-relay URL/CIDRs and
 campaign paths to `/etc/cybergym/runner.env`:
@@ -46,12 +56,22 @@ CG_DAYTONA_TASK_FILE=/absolute/path/to/task-ids.txt
 CG_ARTIFACT_PREFLIGHT_REPORT=/absolute/path/to/full-corpus-preflight.json
 ```
 
-Then prove the Daytona placement and network boundary without inference:
+`daytona-ready` generates the canonical task file and current 24-lane × width-8
+plan, runs the full-corpus gate when needed, and proves the Daytona placement
+without a model call. Existing grader/data and relay infrastructure must already
+be present on the host.
+
+Inspect, boundary-pause, or resume a lane with:
 
 ```bash
-nix run .#campaign-preflight
-nix run .#daytona-preflight
+nix run .#daytona-control -- status --lane 1
+nix run .#daytona-control -- pause --lane 1
+nix run .#daytona-control -- resume --lane 1 --confirm-paid-selection
 ```
+
+Pause lets the active shard finish and prevents the next shard from starting.
+Resume uses the durable manifest and reconciles terminal receipts and sandboxes
+before launching pending work; it cannot resume midway through a model turn.
 
 Run one paid smoke only after both preflights pass:
 

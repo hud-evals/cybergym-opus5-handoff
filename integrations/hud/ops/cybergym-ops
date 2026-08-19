@@ -21,6 +21,9 @@ Commands:
   campaign-preflight    Validate all 1,507 tasks without a model call
   campaign              Resume the spend-gated 200-step full campaign
   daytona-preflight     Prove private Daytona placement without a model call
+  daytona-ready         Build the canonical 24x8 Daytona plan without inference
+  daytona-lane          Run or resume one planned Daytona lane
+  daytona-control       Status, boundary-pause, or resume one Daytona lane
   daytona-campaign      Resume the selected direct-Anthropic Daytona campaign
   server-status         Show the private server service state
 EOF
@@ -34,7 +37,7 @@ case "$COMMAND" in
     -h|--help|help) usage; exit 0 ;;
     setup) exec "$SCRIPT_DIR/setup.sh" "$@" ;;
     server-status) exec systemctl status --no-pager cybergym-server.service ;;
-    preflight|smoke|campaign-preflight|campaign|daytona-preflight|daytona-campaign)
+    preflight|smoke|campaign-preflight|campaign|daytona-preflight|daytona-ready|daytona-lane|daytona-control|daytona-campaign)
         for path in "$SERVER_ENV" "$RUNNER_ENV"; do
             [ -r "$path" ] || { printf 'cybergym-ops: missing readable secret file: %s\n' "$path" >&2; exit 1; }
             mode=$(stat -c '%a' "$path")
@@ -46,7 +49,7 @@ case "$COMMAND" in
         # shellcheck disable=SC1090
         . "$RUNNER_ENV"
         set +a
-        if [ "$COMMAND" = daytona-preflight ] || [ "$COMMAND" = daytona-campaign ]; then
+        case "$COMMAND" in daytona-*)
             DAYTONA_ENV=${CYBERGYM_DAYTONA_ENV:-/etc/cybergym/daytona.env}
             [ -r "$DAYTONA_ENV" ] \
                 || { printf 'cybergym-ops: missing readable secret file: %s\n' "$DAYTONA_ENV" >&2; exit 1; }
@@ -58,13 +61,29 @@ case "$COMMAND" in
             # shellcheck disable=SC1090
             . "$DAYTONA_ENV"
             set +a
-        fi
+            case "$COMMAND" in daytona-lane|daytona-control)
+                DAYTONA_RUN_ENV=${CYBERGYM_DAYTONA_RUN_ENV:-${XDG_CONFIG_HOME:-$HOME/.config}/cybergym/daytona-run.env}
+                [ -f "$DAYTONA_RUN_ENV" ] \
+                    || { printf 'cybergym-ops: run daytona-ready first; missing %s\n' "$DAYTONA_RUN_ENV" >&2; exit 1; }
+                case "$(stat -c '%a' "$DAYTONA_RUN_ENV")" in
+                    600) ;;
+                    *) printf 'cybergym-ops: unsafe mode on %s\n' "$DAYTONA_RUN_ENV" >&2; exit 1 ;;
+                esac
+                set -a
+                # shellcheck disable=SC1090
+                . "$DAYTONA_RUN_ENV"
+                set +a
+                ;; esac
+            ;; esac
         case "$COMMAND" in
             preflight) exec "$SCRIPT_DIR/preflight.sh" "$@" ;;
             smoke) exec "$SCRIPT_DIR/smoke.sh" "$@" ;;
             campaign-preflight) exec "$SCRIPT_DIR/campaign-preflight.sh" "$@" ;;
             campaign) exec "$SCRIPT_DIR/campaign.sh" "$@" ;;
             daytona-preflight) exec "$SCRIPT_DIR/daytona-preflight.sh" "$@" ;;
+            daytona-ready) exec "$SCRIPT_DIR/daytona-ready.sh" "$@" ;;
+            daytona-lane) exec "$SCRIPT_DIR/daytona-lane.sh" "$@" ;;
+            daytona-control) exec "$SCRIPT_DIR/daytona-control.sh" "$@" ;;
             daytona-campaign) exec "$SCRIPT_DIR/daytona-campaign.sh" "$@" ;;
         esac
         ;;

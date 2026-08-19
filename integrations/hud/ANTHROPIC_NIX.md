@@ -10,7 +10,7 @@ nix develop
 nix run .#setup
 sudo -E nix run .#configure
 nix run .#preflight
-nix run .#daytona-preflight
+nix run .#daytona-ready
 ```
 
 The configure step prompts privately for `HUD_API_KEY`,
@@ -18,6 +18,10 @@ The configure step prompts privately for `HUD_API_KEY`,
 credential. The resulting protected files live outside the checkout under
 `/etc/cybergym`. No secret belongs in `flake.nix`, `flake.lock`, Git, shell
 history, or a HUD trace.
+
+For an existing provisioned host, use `sudo -E nix run .#update-keys` instead
+of `configure`. It prompts for the same three operator keys while preserving
+the internal CyberGym server key and all relay/grader/runtime settings.
 
 Run one paid smoke only after preflight passes:
 
@@ -55,8 +59,8 @@ SHA-256 manifest:
 nix run .#daytona-plan -- \
   --task-file "$CG_DAYTONA_TASK_FILE" \
   --output-dir /srv/cybergym/results/opus5-lanes \
-  --lanes 26 \
-  --max-concurrent 35
+  --lanes 24 \
+  --max-concurrent 8
 ```
 
 Run each lane on a separate trusted Linux coordinator. For lane 1:
@@ -67,7 +71,19 @@ export CG_RESULTS_DIR=/srv/cybergym/results/opus5-multilane
 nix run .#daytona-lane -- --lane 1 --confirm-paid-selection
 ```
 
-Repeat with lane numbers 2 through 26. Each HUD Job is named
+Repeat with lane numbers 2 through 24. Each HUD Job is named
 `cybergym-opus5-cyber-lane-NNN`, while the runtime remains direct
 `claude-opus-5`, private Daytona, and no-public-egress. A lane may restart from
 its own durable state directory; never point two coordinators at the same lane.
+
+Lane control is manifest-bound and safe at shard boundaries:
+
+```sh
+nix run .#daytona-control -- status --lane 1
+nix run .#daytona-control -- pause --lane 1
+nix run .#daytona-control -- resume --lane 1 --confirm-paid-selection
+```
+
+An active conversation is allowed to finish before pause takes effect. A
+crashed in-flight attempt is never blindly replayed; the restart path first
+reconciles its HUD receipt and Daytona sandbox ledger.

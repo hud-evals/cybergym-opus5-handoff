@@ -345,6 +345,7 @@ def main() -> None:
                     artifact_fingerprints=fingerprints,
                     selected_task_ids=selected,
                     job_name=args.job_name,
+                    pause_file=state_dir / "pause.requested",
                 )
             )
     except CampaignBlocked as exc:

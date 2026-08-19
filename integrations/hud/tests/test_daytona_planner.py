@@ -10,6 +10,7 @@ from cybergym_hud.taskset import task_ids
 
 ROOT = Path(__file__).resolve().parents[3]
 PLANNER = ROOT / "integrations/hud/ops/plan-daytona-lanes.py"
+PREPARE = ROOT / "integrations/hud/ops/prepare-daytona-catalog.py"
 
 
 def test_daytona_planner_writes_exact_private_opus5_partition(tmp_path: Path) -> None:
@@ -56,3 +57,32 @@ def test_daytona_planner_writes_exact_private_opus5_partition(tmp_path: Path) ->
     assert set(observed) == set(selected)
     assert (output / "manifest.json").stat().st_mode & 0o777 == 0o600
     assert os.access(PLANNER, os.X_OK)
+
+
+def test_daytona_catalog_preparation_writes_all_private_rows(tmp_path: Path) -> None:
+    output = tmp_path / "full-catalog.txt"
+    result = subprocess.run(  # noqa: S603 - fixed checked-in helper under test
+        [
+            sys.executable,
+            str(PREPARE),
+            "--repository-root",
+            str(ROOT),
+            "--output",
+            str(output),
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    rows = output.read_text().splitlines()
+    assert len(rows) == len(set(rows)) == 1507
+    assert output.stat().st_mode & 0o777 == 0o600
+
+
+def test_daytona_planner_defaults_to_current_24x8_topology() -> None:
+    text = PLANNER.read_text(encoding="utf-8")
+    assert 'parser.add_argument("--lanes", type=int, default=24)' in text
+    assert 'parser.add_argument("--max-concurrent", type=int, default=8)' in text

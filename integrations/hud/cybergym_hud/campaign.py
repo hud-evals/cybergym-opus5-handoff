@@ -8,6 +8,7 @@ import fcntl
 import hashlib
 import json
 import os
+import stat
 import threading
 from collections.abc import Callable, Iterable
 from contextlib import contextmanager
@@ -767,6 +768,7 @@ async def run_campaign(
     artifact_fingerprints: dict[str, str] | None = None,
     selected_task_ids: tuple[str, ...] | None = None,
     job_name: str = CAMPAIGN_JOB_NAME,
+    pause_file: Path | None = None,
 ) -> dict[str, Any]:
     """Run deterministic shards, checkpointing before each potentially paid call."""
 
@@ -806,10 +808,24 @@ async def run_campaign(
             )
         state.acknowledge_halt()
 
+    paused = False
     for shard in state.payload["shards"]:
         pending = state.pending_task_ids(shard["index"])
         if not pending:
             continue
+        try:
+            metadata = pause_file.lstat() if pause_file is not None else None
+        except FileNotFoundError:
+            metadata = None
+        if metadata is not None:
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_mode & 0o077
+                or pause_file.read_bytes() != b"pause-after-current-shard-v1\n"
+            ):
+                raise CampaignBlocked("campaign pause request is malformed or unsafe")
+            paused = True
+            break
         taskset = make_taskset(server=config.server, selected=pending, root=config.repository_root)
         job = await job_factory(job_name, taskset_id=taskset.api_id)
         if job.name != job_name:
@@ -882,6 +898,7 @@ async def run_campaign(
         "task_count": total,
         "completed_task_count": completed,
         "complete": completed == total,
+        "paused": paused,
         "max_iter": CAMPAIGN_MAX_ITER,
         "timeout_seconds": CAMPAIGN_TIMEOUT_SECONDS,
         "max_concurrent": max_concurrent,
@@ -969,6 +986,7 @@ def main() -> None:
                     confirm_paid_all=args.confirm_paid_all,
                     continue_after_errors=args.continue_after_errors,
                     artifact_fingerprints=artifact_fingerprints,
+                    pause_file=state_dir / "pause.requested",
                 )
             )
     except CampaignBlocked as exc:

@@ -14,9 +14,12 @@ SCRIPTS = tuple(
         "preflight.sh",
         "smoke.sh",
         "configure-secrets.sh",
+        "update-secrets.sh",
         "install-service.sh",
         "install-campaign-service.sh",
         "daytona-preflight.sh",
+        "daytona-ready.sh",
+        "daytona-control.sh",
         "daytona-campaign.sh",
         "daytona-lane.sh",
         "server.sh",
@@ -226,6 +229,37 @@ def test_daytona_multilane_runner_is_opus5_and_lane_scoped() -> None:
     assert "CG_DAYTONA_TASK_FILE" in lane
     assert "CG_RESULTS_DIR" in lane
     assert "ANTHROPIC_API_KEY" not in lane
+
+
+def test_existing_host_key_update_preserves_internal_server_and_runtime_settings() -> None:
+    update = (OPS / "update-secrets.sh").read_text(encoding="utf-8")
+    assert "HUD API key" in update
+    assert "Anthropic API key" in update
+    assert "Daytona API key" in update
+    assert 'server = read_private(paths["server"])' in update
+    assert 'server.get("CYBERGYM_API_KEY")' in update
+    assert 'write_atomic(paths["server"]' not in update
+    assert 'runner["HUD_API_KEY"] = hud_key' in update
+    assert 'runner["ANTHROPIC_API_KEY"] = anthropic_key' in update
+    assert 'daytona["DAYTONA_API_KEY"] = daytona_key' in update
+
+
+def test_daytona_ready_uses_current_gated_24x8_topology() -> None:
+    ready = (OPS / "daytona-ready.sh").read_text(encoding="utf-8")
+    dispatcher = (OPS / "cybergym-ops").read_text(encoding="utf-8")
+    assert "Usage: daytona-ready.sh" in ready
+    assert "--lanes 24 --max-concurrent 8" in ready
+    assert "campaign-preflight.sh" in ready
+    assert "daytona-preflight.sh" in ready
+    assert "daytona-ready" in dispatcher
+
+
+def test_daytona_control_is_boundary_safe_and_resume_is_spend_gated() -> None:
+    control = (OPS / "daytona-control.sh").read_text(encoding="utf-8")
+    assert "Pause requested" in control
+    assert "active shard, if any, will finish" in control
+    assert "resume requires --confirm-paid-selection" in control
+    assert 'daytona-lane.sh" --lane' in control
 
 
 def test_campaign_service_uses_a_deterministic_operator_path() -> None:

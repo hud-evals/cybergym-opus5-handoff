@@ -110,14 +110,17 @@
           default = mkDispatcherApp pkgs "preflight" "preflight";
           setup = mkOperatorApp pkgs "setup" "integrations/hud/ops/setup.sh";
           configure = mkOperatorApp pkgs "configure" "integrations/hud/ops/configure-secrets.sh";
+          update-keys = mkOperatorApp pkgs "update-keys" "integrations/hud/ops/update-secrets.sh";
           preflight = mkDispatcherApp pkgs "preflight" "preflight";
           smoke = mkDispatcherApp pkgs "smoke" "smoke";
           campaign-preflight = mkDispatcherApp pkgs "campaign-preflight" "campaign-preflight";
           campaign = mkDispatcherApp pkgs "campaign" "campaign";
           daytona-preflight = mkDispatcherApp pkgs "daytona-preflight" "daytona-preflight";
+          daytona-ready = mkDispatcherApp pkgs "daytona-ready" "daytona-ready";
+          daytona-control = mkDispatcherApp pkgs "daytona-control" "daytona-control";
           daytona-campaign = mkDispatcherApp pkgs "daytona-campaign" "daytona-campaign";
           daytona-plan = mkOperatorApp pkgs "daytona-plan" "integrations/hud/ops/plan-daytona-lanes.py";
-          daytona-lane = mkOperatorApp pkgs "daytona-lane" "integrations/hud/ops/daytona-lane.sh";
+          daytona-lane = mkDispatcherApp pkgs "daytona-lane" "daytona-lane";
           reconcile = mkOperatorApp pkgs "reconcile" "integrations/hud/ops/reconcile.sh";
         }
       );
