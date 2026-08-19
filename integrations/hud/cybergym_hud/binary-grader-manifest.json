@@ -1,0 +1,12 @@
+{
+  "algorithm": "cybergym_hud.catalog_preflight._tree_digest/v1",
+  "apparent_file_bytes": 130195047160,
+  "directories": 14793,
+  "entries": 92888,
+  "files": 77625,
+  "observed_at": "2026-08-13T22:18:59.904117+00:00",
+  "origin_attestation": "unavailable; this manifest pins the reviewed local corpus bytes and does not claim upstream provenance",
+  "schema_version": "1",
+  "symlinks": 470,
+  "tree_sha256": "fe793d3ed06692b5566e3b1eeca91e39eabb87c5386dd7091d1c94516892b455"
+}

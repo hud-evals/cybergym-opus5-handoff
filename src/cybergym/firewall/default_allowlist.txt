@@ -1,0 +1,8 @@
+# Default domain allowlist for the CyberGym proxy.
+# Uses Squid dstdomain format: leading dot matches the domain and all subdomains.
+# Lines starting with # are comments.
+
+# llm apis
+api.openai.com
+api.anthropic.com
+generativelanguage.googleapis.com
