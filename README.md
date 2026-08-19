@@ -25,8 +25,7 @@ instance as a normal sudo-enabled user and run:
 curl -fsSL https://install.determinate.systems/nix | sh -s -- install --no-confirm
 . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
 
-git clone --branch agent/cybergym-daytona-anthropic \
-  https://github.com/hud-evals/cybergym.git
+git clone https://github.com/hud-evals/cybergym-opus5-handoff.git cybergym
 cd cybergym
 nix run .#bootstrap
 ```
