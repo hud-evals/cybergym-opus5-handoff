@@ -48,7 +48,7 @@ nix run .#daytona -- resume
 Pause never kills an active rollout. Resume never reruns a verified task and
 cannot resume in the middle of a model turn. Results, raw trajectories,
 projections, grader summaries, sandbox ledgers, and campaign manifests remain
-on the EC2 disk and completed Jobs/Traces are uploaded to HUD.
+on the EC2 disk and completed job scores are uploaded to HUD.
 
 ## Rotate keys
 
