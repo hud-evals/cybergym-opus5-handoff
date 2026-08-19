@@ -16,8 +16,8 @@ Usage: nix run .#bootstrap [-- --workers 1..32]
 On a fresh Ubuntu 24.04 x86_64 EC2 host, install and verify the complete
 CyberGym grader, source corpus, HTTPS Daytona relay, and durable lane services.
 This command prompts only for HUD, Anthropic, and Daytona API keys and makes no
-model/inference request. The instance needs at least 16 vCPU, 64 GiB RAM,
-500 GiB free disk, and inbound TCP 80/443 for the task-scoped relay.
+model/inference request. The reviewed 24x8 fleet should use 64 vCPU, 256 GiB
+RAM, 500 GiB free disk, and inbound TCP 80/443 for the task-scoped relay.
 EOF
 }
 
