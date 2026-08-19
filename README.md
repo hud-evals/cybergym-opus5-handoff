@@ -16,79 +16,64 @@ CyberGym is a large-scale, high-quality cybersecurity evaluation framework desig
 
 ## Claude Opus 5 Nix/Daytona handoff
 
-This flow requires a native Linux x86_64 machine with Docker and Nix flakes.
-It pins direct `claude-opus-5`, keeps secrets outside Git, and preserves the
-no-public-egress task runtime.
+Start a fresh Ubuntu 24.04 x86_64 EC2 instance with at least 16 vCPU, 64 GiB
+RAM, and a 1 TiB gp3 disk. Allow inbound TCP 80 and 443 for the task-scoped
+HTTPS submission relay; do not expose any other CyberGym port. SSH to the
+instance as a normal sudo-enabled user and run:
 
 ```bash
-git fetch hud-evals
-git switch agent/cybergym-daytona-anthropic
+curl -fsSL https://install.determinate.systems/nix | sh -s -- install --no-confirm
+. /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
 
-nix develop
-nix run .#setup
-sudo -E nix run .#configure
-sudo integrations/hud/ops/install-service.sh
-nix run .#preflight
-nix run .#daytona-ready
+git clone --branch agent/cybergym-daytona-anthropic \
+  https://github.com/hud-evals/cybergym.git
+cd cybergym
+nix run .#bootstrap
 ```
 
-`configure` privately prompts for `HUD_API_KEY`, `ANTHROPIC_API_KEY`, and
-`DAYTONA_API_KEY`. It stores protected environment files under
-`/etc/cybergym`; no secret should be committed, passed in argv, or written to
-shell history.
+`bootstrap` privately prompts for exactly three runtime credentials:
+`HUD_API_KEY`, `ANTHROPIC_API_KEY`, and `DAYTONA_API_KEY`. It installs Docker,
+downloads and verifies the pinned 1,507-task source corpus and binary grader,
+builds the pinned agent, starts the private grader and public task-scoped HTTPS
+relay, validates Daytona placement, and installs durable lane services. It
+makes no model call. Downloads are resumable, so rerunning the same command
+after a disconnect continues from the existing files and preserves all keys
+and campaign checkpoints.
 
-On an already provisioned CyberGym host, refresh only those three keys without
-rotating the internal grader/relay credential or replacing non-secret runtime
-settings:
+Tailscale, AWS Systems Manager, VM101, and access to HUD's AWS account are not
+required. The repository and benchmark artifacts are public; the operator only
+needs administrative access to their own Linux instance and the three keys
+above.
+
+Start the complete paid campaign, inspect it, request a safe pause, or resume
+from its durable checkpoints:
+
+```bash
+nix run .#daytona -- start
+nix run .#daytona -- status
+nix run .#daytona -- pause
+nix run .#daytona -- resume
+```
+
+`pause` lets every active shard finish and prevents the next shard from
+starting. `resume` reconciles saved HUD receipts and Daytona sandboxes before
+launching pending work; it never reruns a verified task and cannot resume in
+the middle of a model turn. The 24 lane services restart automatically after a
+host reboot or transient process failure. Jobs are named
+`cybergym-opus5-cyber-lane-001` through `cybergym-opus5-cyber-lane-024`.
+
+Rotate only the three operator keys later with:
 
 ```bash
 sudo -E nix run .#update-keys
 nix run .#daytona-ready
 ```
 
-For Daytona, add the deployment-specific non-secret task-relay URL/CIDRs and
-campaign paths to `/etc/cybergym/runner.env`:
-
-```bash
-CG_DAYTONA_RELAY_URL=https://YOUR_TASK_RELAY
-CG_DAYTONA_RELAY_CIDRS=RELAY_IPV4/32
-CG_DAYTONA_TASK_FILE=/absolute/path/to/task-ids.txt
-CG_ARTIFACT_PREFLIGHT_REPORT=/absolute/path/to/full-corpus-preflight.json
-```
-
-`daytona-ready` generates the canonical task file and current 24-lane × width-8
-plan, runs the full-corpus gate when needed, and proves the Daytona placement
-without a model call. Existing grader/data and relay infrastructure must already
-be present on the host.
-
-Inspect, boundary-pause, or resume a lane with:
-
-```bash
-nix run .#daytona-control -- status --lane 1
-nix run .#daytona-control -- pause --lane 1
-nix run .#daytona-control -- resume --lane 1 --confirm-paid-selection
-```
-
-Pause lets the active shard finish and prevents the next shard from starting.
-Resume uses the durable manifest and reconciles terminal receipts and sandboxes
-before launching pending work; it cannot resume midway through a model turn.
-
-Run one paid smoke only after both preflights pass:
+For a single paid smoke instead of the full campaign:
 
 ```bash
 nix run .#smoke -- --confirm-spend
 ```
-
-Start or resume the exact selected Daytona campaign:
-
-```bash
-nix run .#daytona-campaign -- --confirm-paid-selection
-```
-
-The HUD Job name is `cybergym-opus5-cyber`. Terminal infrastructure-error
-rows remain pending and are retried only after their remote receipt is
-reconciled. Additional detail is available in
-[`integrations/hud/ANTHROPIC_NIX.md`](integrations/hud/ANTHROPIC_NIX.md).
 
 ## Installation
 Require python and docker environment.

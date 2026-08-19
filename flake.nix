@@ -12,6 +12,7 @@
       toolchainFor =
         pkgs: with pkgs; [
           bash
+          caddy
           clang
           cmake
           coreutils
@@ -28,6 +29,7 @@
           jq
           nodejs_22
           openssh
+          p7zip
           pkg-config
           poetry
           python312
@@ -108,6 +110,7 @@
         in
         {
           default = mkDispatcherApp pkgs "preflight" "preflight";
+          bootstrap = mkOperatorApp pkgs "bootstrap" "integrations/hud/ops/bootstrap-host.sh";
           setup = mkOperatorApp pkgs "setup" "integrations/hud/ops/setup.sh";
           configure = mkOperatorApp pkgs "configure" "integrations/hud/ops/configure-secrets.sh";
           update-keys = mkOperatorApp pkgs "update-keys" "integrations/hud/ops/update-secrets.sh";
@@ -121,6 +124,9 @@
           daytona-campaign = mkDispatcherApp pkgs "daytona-campaign" "daytona-campaign";
           daytona-plan = mkOperatorApp pkgs "daytona-plan" "integrations/hud/ops/plan-daytona-lanes.py";
           daytona-lane = mkDispatcherApp pkgs "daytona-lane" "daytona-lane";
+          daytona = mkOperatorApp pkgs "daytona" "integrations/hud/ops/daytona-fleet.sh";
+          install-corpus = mkOperatorApp pkgs "install-corpus" "integrations/hud/ops/install-corpus.py";
+          install-relay = mkOperatorApp pkgs "install-relay" "integrations/hud/ops/install-relay.sh";
           reconcile = mkOperatorApp pkgs "reconcile" "integrations/hud/ops/reconcile.sh";
         }
       );

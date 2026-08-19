@@ -60,6 +60,15 @@ case "$COMMAND" in
             set -a
             # shellcheck disable=SC1090
             . "$DAYTONA_ENV"
+            RELAY_ENV=${CYBERGYM_RELAY_ENV:-/etc/cybergym/relay.env}
+            [ -r "$RELAY_ENV" ] \
+                || { printf 'cybergym-ops: missing readable secret file: %s\n' "$RELAY_ENV" >&2; exit 1; }
+            case "$(stat -c '%a' "$RELAY_ENV")" in
+                600|640) ;;
+                *) printf 'cybergym-ops: unsafe mode on %s\n' "$RELAY_ENV" >&2; exit 1 ;;
+            esac
+            # shellcheck disable=SC1090
+            . "$RELAY_ENV"
             set +a
             case "$COMMAND" in daytona-lane|daytona-control)
                 DAYTONA_RUN_ENV=${CYBERGYM_DAYTONA_RUN_ENV:-${XDG_CONFIG_HOME:-$HOME/.config}/cybergym/daytona-run.env}

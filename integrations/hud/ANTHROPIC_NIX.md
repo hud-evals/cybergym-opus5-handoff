@@ -1,89 +1,29 @@
 # CyberGym Claude Opus 5 Nix handoff
 
-Use a native Linux x86_64 host with Docker and KVM-capable virtualization where
-required. The branch is `agent/cybergym-daytona-anthropic`; it is separate from
-the running GPT-5.6 campaign.
+The authoritative fresh-EC2 instructions are in the repository root
+[`README.md`](../../README.md#claude-opus-5-nixdaytona-handoff).
+
+The complete setup is:
 
 ```sh
-git switch agent/cybergym-daytona-anthropic
-nix develop
-nix run .#setup
-sudo -E nix run .#configure
-nix run .#preflight
-nix run .#daytona-ready
+nix run .#bootstrap
+nix run .#daytona -- start
 ```
 
-The configure step prompts privately for `HUD_API_KEY`,
-`ANTHROPIC_API_KEY`, and `DAYTONA_API_KEY`, then rotates the internal CyberGym
-credential. The resulting protected files live outside the checkout under
-`/etc/cybergym`. No secret belongs in `flake.nix`, `flake.lock`, Git, shell
-history, or a HUD trace.
+`bootstrap` prompts privately for `HUD_API_KEY`, `ANTHROPIC_API_KEY`, and
+`DAYTONA_API_KEY`, downloads and verifies every pinned public artifact, and
+performs all no-inference gates. It does not depend on VM101, Tailscale, AWS
+Systems Manager, or access to HUD infrastructure.
 
-For an existing provisioned host, use `sudo -E nix run .#update-keys` instead
-of `configure`. It prompts for the same three operator keys while preserving
-the internal CyberGym server key and all relay/grader/runtime settings.
-
-Run one paid smoke only after preflight passes:
+Fleet lifecycle commands are:
 
 ```sh
-nix run .#smoke -- --confirm-spend
+nix run .#daytona -- status
+nix run .#daytona -- pause
+nix run .#daytona -- resume
 ```
 
-Run the restart-safe full catalog only after reviewing the smoke and explicit
-spend boundary:
-
-```sh
-nix run .#campaign -- --confirm-paid-all --continue-after-errors
-```
-
-For the private Daytona lane, set the non-secret relay/task-file paths described
-by `integrations/hud/ops/daytona-campaign.sh`, then run:
-
-```sh
-nix run .#daytona-campaign -- --confirm-paid-selection
-```
-
-The model arm and HUD Job identity are fixed to direct `claude-opus-5` and
-`cybergym-claude-opus-5-no-internet-v1`. Model access occurs in the trusted
-coordinator. The task runtime has no public IP/DNS egress and can reach only
-the task-scoped submission relay. Terminal infrastructure-error rows remain
-pending for exact automatic retry after their remote receipt is reconciled.
-
-## Horizontal Daytona lanes
-
-For higher throughput, partition one private catalog-ordered task file into
-disjoint lanes. The planner writes mode-0600 task files plus an exact union and
-SHA-256 manifest:
-
-```sh
-nix run .#daytona-plan -- \
-  --task-file "$CG_DAYTONA_TASK_FILE" \
-  --output-dir /srv/cybergym/results/opus5-lanes \
-  --lanes 24 \
-  --max-concurrent 8
-```
-
-Run each lane on a separate trusted Linux coordinator. For lane 1:
-
-```sh
-export CG_DAYTONA_PLAN_DIR=/srv/cybergym/results/opus5-lanes
-export CG_RESULTS_DIR=/srv/cybergym/results/opus5-multilane
-nix run .#daytona-lane -- --lane 1 --confirm-paid-selection
-```
-
-Repeat with lane numbers 2 through 24. Each HUD Job is named
-`cybergym-opus5-cyber-lane-NNN`, while the runtime remains direct
-`claude-opus-5`, private Daytona, and no-public-egress. A lane may restart from
-its own durable state directory; never point two coordinators at the same lane.
-
-Lane control is manifest-bound and safe at shard boundaries:
-
-```sh
-nix run .#daytona-control -- status --lane 1
-nix run .#daytona-control -- pause --lane 1
-nix run .#daytona-control -- resume --lane 1 --confirm-paid-selection
-```
-
-An active conversation is allowed to finish before pause takes effect. A
-crashed in-flight attempt is never blindly replayed; the restart path first
-reconciles its HUD receipt and Daytona sandbox ledger.
+Pause is applied at shard boundaries. Completed tasks, HUD receipts, raw
+trajectories, projections, grader summaries, and sandbox ledgers remain in the
+lane's durable state and result directories. Resume reconciles those records
+before it starts pending work.

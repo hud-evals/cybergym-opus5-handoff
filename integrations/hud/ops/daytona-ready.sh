@@ -21,9 +21,9 @@ fi
 }
 [ -n "$RESULTS_DIR" ] || { printf '%s\n' 'daytona-ready: CG_RESULTS_DIR is required' >&2; exit 1; }
 [ -n "${CG_DAYTONA_RELAY_URL-}" ] \
-    || { printf '%s\n' 'daytona-ready: existing protected host lacks CG_DAYTONA_RELAY_URL' >&2; exit 1; }
+    || { printf '%s\n' 'daytona-ready: install the task-scoped HTTPS relay first' >&2; exit 1; }
 [ -n "${CG_DAYTONA_RELAY_CIDRS-}" ] \
-    || { printf '%s\n' 'daytona-ready: existing protected host lacks CG_DAYTONA_RELAY_CIDRS' >&2; exit 1; }
+    || { printf '%s\n' 'daytona-ready: relay public IPv4 binding is missing' >&2; exit 1; }
 
 root=$RESULTS_DIR/daytona-anthropic
 task_file=$root/full-catalog.txt
@@ -56,6 +56,8 @@ CG_ARTIFACT_PREFLIGHT_REPORT=$artifact_report
 CG_DAYTONA_PREFLIGHT_REPORT=$daytona_report
 CG_DAYTONA_PLAN_DIR=$plan_dir
 CG_RESULTS_DIR=$RESULTS_DIR/opus5-multilane
+CG_DAYTONA_RELAY_URL=$CG_DAYTONA_RELAY_URL
+CG_DAYTONA_RELAY_CIDRS=$CG_DAYTONA_RELAY_CIDRS
 CG_DAYTONA_MAX_CONCURRENT=8
 CG_DAYTONA_SHARD_SIZE=8
 EOF

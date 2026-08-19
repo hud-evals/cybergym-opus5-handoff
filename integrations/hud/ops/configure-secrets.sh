@@ -7,7 +7,7 @@ umask 077
 
 usage() {
     cat <<'EOF'
-Usage: sudo configure-secrets.sh [--operator USER]
+Usage: sudo configure-secrets.sh [--operator USER] [--repository-root PATH]
 
 Prompt privately for HUD_API_KEY, ANTHROPIC_API_KEY, and DAYTONA_API_KEY,
 rotate the internal CyberGym server key, and atomically write the protected
@@ -16,11 +16,18 @@ EOF
 }
 
 OPERATOR=${SUDO_USER:-rose}
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPOSITORY_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --operator)
             [ "$#" -ge 2 ] || { printf '%s\n' 'configure-secrets: --operator requires a user' >&2; exit 2; }
             OPERATOR=$2
+            shift 2
+            ;;
+        --repository-root)
+            [ "$#" -ge 2 ] || { printf '%s\n' 'configure-secrets: --repository-root requires a path' >&2; exit 2; }
+            REPOSITORY_ROOT=$2
             shift 2
             ;;
         -h|--help)
@@ -36,6 +43,8 @@ done
 
 [ "$(id -u)" -eq 0 ] || { printf '%s\n' 'configure-secrets: run with sudo' >&2; exit 1; }
 id "$OPERATOR" >/dev/null 2>&1 || { printf 'configure-secrets: unknown operator: %s\n' "$OPERATOR" >&2; exit 1; }
+[ -d "$REPOSITORY_ROOT/.git" ] || { printf 'configure-secrets: not a Git checkout: %s\n' "$REPOSITORY_ROOT" >&2; exit 1; }
+REPOSITORY_ROOT=$(CDPATH= cd -- "$REPOSITORY_ROOT" && pwd -P)
 
 # Read from the controlling terminal even when the helper is invoked through
 # SSH/sudo or a pipeline. Refuse noninteractive use instead of accepting a key
@@ -43,7 +52,7 @@ id "$OPERATOR" >/dev/null 2>&1 || { printf 'configure-secrets: unknown operator:
 [ -r /dev/tty ] && [ -w /dev/tty ] \
     || { printf '%s\n' 'configure-secrets: a controlling TTY is required (use ssh -t)' >&2; exit 1; }
 
-python3 - "$OPERATOR" <<'PY'
+python3 - "$OPERATOR" "$REPOSITORY_ROOT" <<'PY'
 from __future__ import annotations
 
 import getpass
@@ -57,6 +66,7 @@ import tempfile
 from pathlib import Path
 
 operator = os.sys.argv[1]
+repository_root = os.sys.argv[2]
 account = pwd.getpwnam(operator)
 group = grp.getgrgid(account.pw_gid)
 
@@ -101,6 +111,7 @@ hud_key = prompt_twice("HUD API key")
 anthropic_key = prompt_twice("Anthropic API key")
 daytona_key = prompt_twice("Daytona API key")
 private_key = f"cybergym-{secrets.token_urlsafe(32)}"
+relay_admin_token = secrets.token_hex(32)
 uv_bin = shutil.which("uv")
 if not uv_bin:
     for candidate in (Path("/usr/local/bin/uv"), Path(f"/home/{operator}/.local/bin/uv")):
@@ -112,12 +123,13 @@ if not uv_bin:
 
 server = {
     "CYBERGYM_API_KEY": private_key,
-    "CG_REPOSITORY_ROOT": "/srv/cybergym/cybergym-og-fidelity-hud",
+    "CG_REPOSITORY_ROOT": repository_root,
     "CG_RESULTS_DIR": "/srv/cybergym/results-og-fidelity",
     "CG_SERVER_MODE": "binary",
     "CG_SERVER_BINARY_DIR": "/srv/cybergym/cybergym-server-data",
     "CG_SERVER_DEPLOYMENT_SEAL": "/etc/cybergym/server-attestation.json",
     "CG_SERVER_PORT": "8666",
+    "CG_SERVER_URL": "http://172.30.0.1:8666",
     "CG_RUNTIME_NETWORK": "cybergym-no-internet",
     "CG_UV_BIN": uv_bin,
     "UV_CACHE_DIR": "/srv/cybergym/uv-cache",
@@ -141,13 +153,18 @@ runner = {
 daytona = {
     "DAYTONA_API_KEY": daytona_key,
 }
+relay = {
+    "CG_DAYTONA_RELAY_ADMIN_TOKEN": relay_admin_token,
+    "CG_DAYTONA_RELAY_REGISTRY": "/srv/cybergym/daytona-relay/registry",
+}
 
 write_atomic(Path("/etc/cybergym/server.env"), server, 0o640)
 write_atomic(Path("/etc/cybergym/runner.env"), runner, 0o640)
 write_atomic(Path("/etc/cybergym/daytona.env"), daytona, 0o640)
+write_atomic(Path("/etc/cybergym/relay.env"), relay, 0o640)
 
 # Drop references promptly; process exit clears the remaining interpreter state.
-hud_key = anthropic_key = daytona_key = private_key = ""
+hud_key = anthropic_key = daytona_key = private_key = relay_admin_token = ""
 print(f"Wrote protected CyberGym environment files for root:{group.gr_name} (values suppressed).")
 PY
 

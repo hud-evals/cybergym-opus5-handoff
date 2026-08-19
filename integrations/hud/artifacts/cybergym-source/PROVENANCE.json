@@ -1,0 +1,42 @@
+{
+  "file_count": 3017,
+  "git_objects_verified": 3,
+  "gzip_tar_archives_verified": 1507,
+  "hf_xet_version": "1.6.0",
+  "huggingface_hub_version": "1.27.0",
+  "lfs_xet_files_verified": 3014,
+  "platform": "Linux-6.8.0-137-generic-x86_64-with-glibc2.39",
+  "pointer_files_found": 0,
+  "python": "3.12.3 (main, Jun 19 2026, 12:46:00) [GCC 13.3.0]",
+  "repository": "sunblaze-ucb/cybergym",
+  "repository_type": "dataset",
+  "revision": "bde190ded494e52bc684b66073b436c9d992c7c6",
+  "root": "/srv/cybergym-runtime/task-data/cybergym-data",
+  "runner_catalog": "/srv/cybergym/cybergym-og-fidelity-hud/mask_map.json",
+  "selected_manifest": "/srv/cybergym-runtime/task-data/provenance/selected-manifest.json",
+  "selected_manifest_sha256": "62020973579feafe340c756dd8e3aa0dc7d0e1e8b39674bd4063baa42c5a97ea",
+  "selection": [
+    ".gitattributes",
+    "README.md",
+    "tasks.json",
+    "data/*/*/description.txt",
+    "data/*/*/repo-vul.tar.gz"
+  ],
+  "staging_script": "/srv/cybergym-runtime/task-data/.staging/stage-cybergym-corpus.py",
+  "staging_script_sha256": "1b1ee3018e78c18daaa5cf04e0b4ee45fd8a22ea050a1e12bba3c5de1465893c",
+  "status": "verified",
+  "tar_members_seen": 10372338,
+  "task_catalog": {
+    "count": 1507,
+    "schemes": {
+      "arvo": 1368,
+      "oss-fuzz": 139
+    },
+    "sha256": "9cea452cc1e1a3703e0f60c2dfc8642430aab9f50433f976581509de58c7048f",
+    "unique_count": 1507
+  },
+  "total_bytes": 118156327554,
+  "verification_completed_at": "2026-08-13T23:02:39.805585+00:00",
+  "verification_started_at": "2026-08-13T22:49:54.733887+00:00",
+  "verification_workers": 1
+}

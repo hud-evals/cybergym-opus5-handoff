@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -22,6 +24,10 @@ SCRIPTS = tuple(
         "daytona-control.sh",
         "daytona-campaign.sh",
         "daytona-lane.sh",
+        "bootstrap-host.sh",
+        "daytona-fleet.sh",
+        "install-daytona-fleet.sh",
+        "install-relay.sh",
         "server.sh",
         "cybergym-ops",
     )
@@ -337,6 +343,8 @@ def test_secret_entry_and_dispatch_never_put_values_in_argv() -> None:
     assert "/etc/cybergym/server.env" in configure
     assert "/etc/cybergym/runner.env" in configure
     assert "/etc/cybergym/daytona.env" in configure
+    assert "/etc/cybergym/relay.env" in configure
+    assert "secrets.token_hex(32)" in configure
     assert '"CG_DATA_DIR": "/srv/cybergym-runtime/task-data/cybergym-data/data"' in configure
     assert '"CG_DATA_PROVENANCE": "/srv/cybergym-runtime/task-data/provenance/PROVENANCE.json"' in configure
     assert '"CG_SERVER_DEPLOYMENT_SEAL": "/etc/cybergym/server-attestation.json"' in configure
@@ -346,6 +354,87 @@ def test_secret_entry_and_dispatch_never_put_values_in_argv() -> None:
     assert "try-restart" not in configure
     assert "set +x" in dispatcher
     assert 'exec "$SCRIPT_DIR/smoke.sh"' in dispatcher
+
+
+def test_fresh_host_assets_are_exactly_pinned() -> None:
+    artifacts = ROOT / "integrations" / "hud" / "artifacts" / "cybergym-source"
+    provenance_path = artifacts / "PROVENANCE.json"
+    manifest_path = artifacts / "selected-manifest.json"
+    assert hashlib.sha256(provenance_path.read_bytes()).hexdigest() == (
+        "9246b82aa98f2f1afcede95f9045fae4429a8da7289966bad2c728af70f48cb5"
+    )
+    assert hashlib.sha256(manifest_path.read_bytes()).hexdigest() == (
+        "62020973579feafe340c756dd8e3aa0dc7d0e1e8b39674bd4063baa42c5a97ea"
+    )
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert provenance["revision"] == "bde190ded494e52bc684b66073b436c9d992c7c6"
+    assert provenance["file_count"] == 3_017
+    assert provenance["total_bytes"] == 118_156_327_554
+    assert len(manifest["files"]) == 3_017
+    assert sum(row["size"] for row in manifest["files"]) == 118_156_327_554
+
+
+def test_fresh_host_installer_is_resumable_and_verifies_public_artifacts() -> None:
+    corpus = (OPS / "install-corpus.py").read_text(encoding="utf-8")
+    bootstrap = (OPS / "bootstrap-host.sh").read_text(encoding="utf-8")
+    assert "--continue-at" in corpus
+    assert "BINARY_ARCHIVE_SHA256" in corpus
+    assert "SOURCE_MANIFEST_SHA256" in corpus
+    assert "SOURCE_PROVENANCE_SHA256" in corpus
+    assert "os.replace(partial, destination)" in corpus
+    assert "ThreadPoolExecutor" in corpus
+    assert "install-corpus.py" in bootstrap
+    assert "cybergym-hud-attest-grader capture" in bootstrap
+    assert "daytona-ready" in bootstrap
+    assert "Protected key configuration already exists" in bootstrap
+
+
+def test_public_relay_exposes_only_task_scoped_https() -> None:
+    relay = (OPS / "relay.sh").read_text(encoding="utf-8")
+    installer = (OPS / "install-relay.sh").read_text(encoding="utf-8")
+    dispatcher = (OPS / "cybergym-ops").read_text(encoding="utf-8")
+    assert "--host 127.0.0.1" in relay
+    assert "--enable-admin" in relay
+    assert "sslip.io" in installer
+    assert "reverse_proxy 127.0.0.1:18765" in installer
+    assert "AmbientCapabilities=CAP_NET_BIND_SERVICE" in installer
+    assert "CG_DAYTONA_RELAY_URL" in installer
+    assert "CG_DAYTONA_RELAY_CIDRS" in installer
+    assert "CG_DAYTONA_GRADER_ADMIN_URL" in installer
+    assert "tailscale funnel" not in installer.lower()
+    assert "tailscale serve" not in installer.lower()
+    assert '. "$RELAY_ENV"' in dispatcher
+
+
+def test_daytona_fleet_controls_are_durable_and_boundary_safe() -> None:
+    fleet = (OPS / "daytona-fleet.sh").read_text(encoding="utf-8")
+    installer = (OPS / "install-daytona-fleet.sh").read_text(encoding="utf-8")
+    assert "start|status|pause|resume" in fleet
+    assert "daytona-control pause" in fleet
+    assert 'daytona-control.py" clear' in fleet
+    assert "systemctl start" in fleet
+    assert "systemctl stop" not in fleet
+    assert "Restart=on-failure" in installer
+    assert "RestartSec=60" in installer
+    assert "TimeoutStopSec=infinity" in installer
+    assert "cybergym-daytona@.service" in installer
+
+
+def test_root_readme_is_a_three_key_fresh_ec2_handoff() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    for expected in (
+        "nix run .#bootstrap",
+        "HUD_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "DAYTONA_API_KEY",
+        "nix run .#daytona -- start",
+        "nix run .#daytona -- status",
+        "nix run .#daytona -- pause",
+        "nix run .#daytona -- resume",
+        "Tailscale, AWS Systems Manager, VM101",
+    ):
+        assert expected in readme
 
 
 def test_private_server_is_unmasked_and_internal_network_only() -> None:
