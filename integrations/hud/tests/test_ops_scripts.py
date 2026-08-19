@@ -433,9 +433,9 @@ def test_root_readme_is_a_three_key_fresh_ec2_handoff() -> None:
         "nix run .#daytona -- status",
         "nix run .#daytona -- pause",
         "nix run .#daytona -- resume",
-        "Tailscale, AWS Systems Manager, VM101",
     ):
         assert expected in readme
+    assert "HUD's AWS account" not in readme
 
 
 def test_nix_apps_export_the_compiler_runtime_for_binary_wheels() -> None:

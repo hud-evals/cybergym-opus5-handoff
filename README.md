@@ -10,9 +10,6 @@
   - `ANTHROPIC_API_KEY`
   - `DAYTONA_API_KEY`
 
-You do not need Tailscale, AWS Systems Manager, VM101, or access to HUD's AWS
-account.
-
 ## Install
 
 SSH into the EC2 instance and run:
