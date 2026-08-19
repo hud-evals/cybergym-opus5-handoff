@@ -34,7 +34,10 @@ case "$WORKERS" in ''|*[!0-9]*) printf '%s\n' 'bootstrap-host: --workers must be
     || { printf '%s\n' 'bootstrap-host: --workers must be between 1 and 32' >&2; exit 2; }
 
 if [ "$(id -u)" -ne 0 ]; then
-    exec sudo "$SCRIPT_DIR/bootstrap-host.sh" --operator "$OPERATOR" --workers "$WORKERS"
+    exec sudo env \
+        "PATH=$PATH" \
+        "LD_LIBRARY_PATH=${LD_LIBRARY_PATH-}" \
+        "$SCRIPT_DIR/bootstrap-host.sh" --operator "$OPERATOR" --workers "$WORKERS"
 fi
 
 case "$(uname -s)/$(uname -m)" in
@@ -86,6 +89,7 @@ run_as_operator() {
         HOME="$HOME_DIR" \
         USER="$OPERATOR" \
         PATH="$PATH" \
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH-}" \
         UV_CACHE_DIR=/srv/cybergym/uv-cache \
         XDG_CACHE_HOME=/srv/cybergym/operator-cache \
         "$@"

@@ -134,6 +134,7 @@ server = {
     "CG_UV_BIN": uv_bin,
     "UV_CACHE_DIR": "/srv/cybergym/uv-cache",
     "DOCKER_CONFIG": "/srv/cybergym/docker-config",
+    "LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH", ""),
 }
 runner = {
     "HUD_API_KEY": hud_key,
@@ -149,6 +150,7 @@ runner = {
     "CG_SMOKE_TASK_ID": "arvo:10400",
     "CG_CAMPAIGN_MAX_CONCURRENT": "4",
     "CG_CAMPAIGN_SHARD_SIZE": "12",
+    "LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH", ""),
 }
 daytona = {
     "DAYTONA_API_KEY": daytona_key,

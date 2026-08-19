@@ -44,6 +44,7 @@
             text = ''
               export UV_PYTHON="${pkgs.python312}/bin/python3.12"
               export UV_PYTHON_DOWNLOADS=never
+              export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib ]}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
               root="$(git rev-parse --show-toplevel)"
               target="$root/${command}"
               if [ ! -x "$target" ]; then
@@ -67,6 +68,7 @@
             text = ''
               export UV_PYTHON="${pkgs.python312}/bin/python3.12"
               export UV_PYTHON_DOWNLOADS=never
+              export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib ]}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
               root="$(git rev-parse --show-toplevel)"
               dispatcher="$root/integrations/hud/ops/cybergym-ops"
               if [ ! -x "$dispatcher" ]; then
@@ -92,6 +94,7 @@
           default = pkgs.mkShellNoCC {
             packages = toolchainFor pkgs;
             env = {
+              LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib ];
               UV_PYTHON = "${pkgs.python312}/bin/python3.12";
               UV_PYTHON_DOWNLOADS = "never";
             };
