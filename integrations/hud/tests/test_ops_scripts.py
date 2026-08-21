@@ -471,8 +471,10 @@ def test_nix_apps_export_the_compiler_runtime_for_binary_wheels() -> None:
     flake = (ROOT / "flake.nix").read_text(encoding="utf-8")
     configure = (OPS / "configure-secrets.sh").read_text(encoding="utf-8")
     assert flake.count('export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath') == 2
+    assert flake.count('export XDG_CACHE_HOME="\'\'${CYBERGYM_OPERATOR_CACHE:-/srv/cybergym/operator-cache}"') == 2
     assert "\n          gcc\n" in flake
     assert "LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath" in flake
+    assert 'XDG_CACHE_HOME = "/srv/cybergym/operator-cache"' in flake
     assert configure.count('"LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH", "")') == 2
 
 

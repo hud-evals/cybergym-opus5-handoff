@@ -46,6 +46,7 @@
             text = ''
               export UV_PYTHON="${pkgs.python312}/bin/python3.12"
               export UV_PYTHON_DOWNLOADS=never
+              export XDG_CACHE_HOME="''${CYBERGYM_OPERATOR_CACHE:-/srv/cybergym/operator-cache}"
               export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib ]}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
               root="$(git rev-parse --show-toplevel)"
               target="$root/${command}"
@@ -70,6 +71,7 @@
             text = ''
               export UV_PYTHON="${pkgs.python312}/bin/python3.12"
               export UV_PYTHON_DOWNLOADS=never
+              export XDG_CACHE_HOME="''${CYBERGYM_OPERATOR_CACHE:-/srv/cybergym/operator-cache}"
               export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib ]}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
               root="$(git rev-parse --show-toplevel)"
               dispatcher="$root/integrations/hud/ops/cybergym-ops"
@@ -97,6 +99,7 @@
             packages = toolchainFor pkgs;
             env = {
               LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib ];
+              XDG_CACHE_HOME = "/srv/cybergym/operator-cache";
               UV_PYTHON = "${pkgs.python312}/bin/python3.12";
               UV_PYTHON_DOWNLOADS = "never";
             };
