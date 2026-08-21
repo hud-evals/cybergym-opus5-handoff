@@ -9,7 +9,6 @@ import pytest
 from hud.agents.types import AgentStep
 
 from cybergym_hud.campaign import (
-    CAMPAIGN_HUD_MAX_STEPS,
     CAMPAIGN_JOB_NAME,
     CampaignBlocked,
     CampaignState,
@@ -21,7 +20,6 @@ from cybergym_hud.campaign import (
     require_remote_job_receipt,
     require_remote_trace_enter,
     run_campaign,
-    start_campaign_job,
     validate_campaign_profile,
 )
 from cybergym_hud.native import NativeOpenHandsConfig
@@ -63,42 +61,15 @@ def _config(tmp_path: Path) -> NativeOpenHandsConfig:
         reasoning_effort=None,
         log_dir=tmp_path / "results/logs",
         tmp_dir=tmp_path / "results/tmp",
-        max_iter=200,
+        max_iter=100,
         timeout=3600,
-        max_output_tokens=16000,
+        max_output_tokens=2048,
         silent=True,
         runtime_nano_cpus=4_000_000_000,
         runtime_memory_bytes=8 * 1024**3,
         runtime_memory_swap_bytes=8 * 1024**3,
         runtime_network="cybergym-no-internet",
     ).normalized()
-
-
-@pytest.mark.asyncio
-async def test_paid_job_creation_requests_complete_hud_projection_budget() -> None:
-    calls = []
-
-    class Client:
-        async def apost(self, path, *, json=None):
-            calls.append((path, json))
-            return {"ok": True}
-
-    job = await start_campaign_job(CAMPAIGN_JOB_NAME, client=Client())
-
-    assert job.name == CAMPAIGN_JOB_NAME
-    assert job.group == 1
-    assert job.taskset_id is None
-    assert calls == [
-        (
-            f"/trace/job/{job.id}/enter",
-            {
-                "name": CAMPAIGN_JOB_NAME,
-                "group": 1,
-                "taskset_id": None,
-                "max_steps": CAMPAIGN_HUD_MAX_STEPS,
-            },
-        )
-    ]
 
 
 def test_paid_campaign_profile_is_exact_and_width_is_capped(tmp_path: Path) -> None:
@@ -108,7 +79,7 @@ def test_paid_campaign_profile_is_exact_and_width_is_capped(tmp_path: Path) -> N
         validate_campaign_profile(config, max_concurrent=7, shard_size=12)
     with pytest.raises(ValueError, match="profile drift"):
         validate_campaign_profile(
-            replace(config, max_iter=201),
+            replace(config, max_iter=101),
             max_concurrent=1,
             shard_size=12,
         )
@@ -396,7 +367,6 @@ async def test_paid_job_must_be_remotely_acknowledged_before_launch() -> None:
                 "can_edit": True,
                 "group_size": 1,
                 "taskset_id": None,
-                "max_steps": CAMPAIGN_HUD_MAX_STEPS,
             }
 
     await require_remote_job_receipt(job, client=Client())

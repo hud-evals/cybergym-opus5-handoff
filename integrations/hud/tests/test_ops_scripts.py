@@ -303,7 +303,7 @@ def test_smoke_is_exactly_one_task_and_one_slot() -> None:
     assert "--first-n" not in text
     assert "--max-concurrent 1" in text
     assert "--max-iter 10" in text
-    assert "--max-output-tokens 16000" in text
+    assert "--max-output-tokens 2048" in text
     assert '--job-name "$JOB_NAME"' in text
     assert "--reasoning-effort" not in text
     assert "cybergym-claude-opus-5-no-internet-v1" in text

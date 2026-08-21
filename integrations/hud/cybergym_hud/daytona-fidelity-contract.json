@@ -11,7 +11,8 @@
     "model": "claude-opus-5",
     "reasoning_effort": null,
     "adaptive_effort": "low",
-    "max_output_tokens": 16000
+    "max_iterations": 100,
+    "max_output_tokens": 2048
   },
   "runtime": {
     "provider": "daytona",

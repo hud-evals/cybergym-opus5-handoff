@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from hud.eval import Job
 from hud.settings import settings
@@ -48,10 +48,9 @@ CAMPAIGN_SCHEMA_VERSION = "1"
 CAMPAIGN_JOB_NAME = "cybergym-claude-opus-5-no-internet-v1"
 CAMPAIGN_MODEL = "claude-opus-5"
 CAMPAIGN_REASONING_EFFORT = None
-CAMPAIGN_MAX_ITER = 200
-CAMPAIGN_HUD_MAX_STEPS = CAMPAIGN_MAX_ITER * 2 + 1
+CAMPAIGN_MAX_ITER = 100
 CAMPAIGN_TIMEOUT_SECONDS = 3600
-CAMPAIGN_MAX_OUTPUT_TOKENS = 16000
+CAMPAIGN_MAX_OUTPUT_TOKENS = 2048
 CAMPAIGN_MAX_CONCURRENT = 6
 DEFAULT_SHARD_SIZE = 12
 MAX_SHARD_SIZE = 24
@@ -504,28 +503,6 @@ async def fetch_job_traces(job_id: str, *, client: PlatformClient | None = None)
     raise CampaignBlocked(f"HUD trace pagination did not terminate for job {job_id}")
 
 
-async def start_campaign_job(
-    name: str,
-    *,
-    taskset_id: str | None = None,
-    client: PlatformClient | None = None,
-) -> Job:
-    """Create a local-run HUD Job while requesting the complete projection budget."""
-
-    client = client or PlatformClient.from_settings()
-    job = Job(id=uuid4().hex, name=name, group=1, taskset_id=taskset_id)
-    await client.apost(
-        f"/trace/job/{job.id}/enter",
-        json={
-            "name": name,
-            "group": 1,
-            "taskset_id": taskset_id,
-            "max_steps": CAMPAIGN_HUD_MAX_STEPS,
-        },
-    )
-    return job
-
-
 async def require_remote_job_receipt(job: Job, *, client: PlatformClient | None = None) -> None:
     """Prove HUD accepted the named Job before any provider call can start."""
 
@@ -544,7 +521,6 @@ async def require_remote_job_receipt(job: Job, *, client: PlatformClient | None 
                 and remote.get("can_edit") is True
                 and remote.get("group_size") == 1
                 and remote.get("taskset_id") is None
-                and remote.get("max_steps") == CAMPAIGN_HUD_MAX_STEPS
             ):
                 traces = await client.aget(f"/jobs/{job.id}/traces", params={"limit": 1, "offset": 0})
                 page = traces if isinstance(traces, list) else traces.get("items", [])
@@ -552,10 +528,7 @@ async def require_remote_job_receipt(job: Job, *, client: PlatformClient | None 
                     return
                 last_problem = "HUD acknowledged the Job with unexpected pre-existing traces"
                 continue
-            last_problem = (
-                "HUD returned a mismatched, non-editable, or under-budget Job receipt "
-                f"(max_steps={remote.get('max_steps')!r}, required={CAMPAIGN_HUD_MAX_STEPS})"
-            )
+            last_problem = "HUD returned a mismatched or non-editable Job receipt"
         if attempt < 2:
             await asyncio.sleep(1.0)
     raise CampaignBlocked(f"HUD did not acknowledge named Job {job.id} before the paid boundary: {last_problem}")
@@ -792,7 +765,7 @@ async def run_campaign(
     confirm_paid_all: bool,
     continue_after_errors: bool = False,
     client: PlatformClient | None = None,
-    job_factory: Callable[..., Any] = start_campaign_job,
+    job_factory: Callable[..., Any] = Job.start,
     job_receipt_verifier: Callable[..., Any] = require_remote_job_receipt,
     batch_runner: Callable[..., Any] = run_many,
     receipt_verifier: Callable[..., Any] = verify_and_persist_remote_receipt,

@@ -58,7 +58,8 @@ def test_daytona_contract_is_separate_and_noncanonical() -> None:
     assert contract["agent"]["model"] == "claude-opus-5"
     assert contract["agent"]["reasoning_effort"] is None
     assert contract["agent"]["adaptive_effort"] == "low"
-    assert contract["agent"]["max_output_tokens"] == 16000
+    assert contract["agent"]["max_iterations"] == 100
+    assert contract["agent"]["max_output_tokens"] == 2048
     assert contract["accounting"]["retry_policy"] == ("terminal_error_rows_remain_pending_for_exact_automatic_retry")
     assert contract["canonical_native_result"] is False
     assert contract["merge_with_native_campaign"] is False

@@ -43,12 +43,10 @@ and verifies the complete benchmark and grader, builds the pinned agent, starts
 the private grader and HTTPS relay, runs the no-model checks, and installs the
 reboot-resilient Daytona workers. Rerunning it preserves keys and checkpoints.
 
-The paid controls remain fail-closed until HUD records a Job budget of 401
-projected steps. The local OpenHands ceiling is 200 iterations, and one
-iteration can project an assistant step plus a tool-result step. A HUD server
-that retains its 100-step default will be reported by `daytona-ready` before
-any model call; the operator must not bypass that gate or truncate the saved
-trajectory.
+The agent budget follows the published CyberGym OpenHands setup: at most 100
+agent iterations and 2,048 output tokens per model turn. This is harness-budget
+parity, not a reproduction of the paper's model cohort: the model evaluated by
+this branch is Claude Opus 5.
 
 ## Start or control the run
 

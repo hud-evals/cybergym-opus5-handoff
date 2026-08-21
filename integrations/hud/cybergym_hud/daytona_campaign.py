@@ -37,7 +37,8 @@ from .taskset import task_ids as catalog_task_ids
 
 JOB_NAME = "cybergym-opus5-cyber"
 MODEL = "claude-opus-5"
-MAX_OUTPUT_TOKENS = 16000
+MAX_ITERATIONS = 100
+MAX_OUTPUT_TOKENS = 2048
 MAX_PRIVATE_FILE_BYTES = 16 * 1024 * 1024
 
 
@@ -311,7 +312,7 @@ def main() -> None:
         reasoning_effort=None,
         log_dir=results_dir / "logs",
         tmp_dir=results_dir / "tmp",
-        max_iter=200,
+        max_iter=MAX_ITERATIONS,
         timeout=3600,
         max_output_tokens=MAX_OUTPUT_TOKENS,
         base_url=os.environ.get("CG_MODEL_BASE_URL", ""),

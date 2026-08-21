@@ -61,7 +61,8 @@ def validate_daytona_contract() -> dict[str, Any]:
         or payload.get("agent", {}).get("model") != "claude-opus-5"
         or payload.get("agent", {}).get("reasoning_effort") is not None
         or payload.get("agent", {}).get("adaptive_effort") != "low"
-        or payload.get("agent", {}).get("max_output_tokens") != 16000
+        or payload.get("agent", {}).get("max_iterations") != 100
+        or payload.get("agent", {}).get("max_output_tokens") != 2048
         or payload.get("runtime", {}).get("image") != DAYTONA_IMAGE
         or payload.get("runtime", {}).get("max_concurrent") != 60
         or payload.get("runtime", {}).get("network")
