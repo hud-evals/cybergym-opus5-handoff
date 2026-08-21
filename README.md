@@ -44,7 +44,9 @@ installs Docker, downloads and verifies the complete benchmark and grader,
 builds the pinned agent, starts the private grader and HTTPS relay, runs the
 no-model checks, and installs the reboot-resilient Daytona workers. If SSH
 disconnects, rerun `nix run .#bootstrap-session` to reattach; the download and
-build continue on the host without manual recovery.
+build continue on the host without manual recovery. If bootstrap exits with an
+error, rerunning the same command starts an idempotent retry from its saved
+files and checkpoints.
 
 The agent budget follows the published CyberGym OpenHands setup: at most 100
 agent iterations and 2,048 output tokens per model turn. This is harness-budget

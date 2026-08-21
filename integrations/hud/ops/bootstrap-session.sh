@@ -39,6 +39,6 @@ if [ "$#" -gt 0 ]; then
         command+=" $quoted_argument"
     done
 fi
-command+="; rc=\$?; printf '\\nCyberGym bootstrap exited with status %s.\\n' \"\$rc\"; printf '%s\\n' \"\$rc\" > $quoted_receipt; exec bash"
+command+="; rc=\$?; printf '\\nCyberGym bootstrap exited with status %s.\\n' \"\$rc\"; printf '%s\\n' \"\$rc\" > $quoted_receipt; exit \"\$rc\""
 
 exec tmux new-session -s "$SESSION" "$command"
