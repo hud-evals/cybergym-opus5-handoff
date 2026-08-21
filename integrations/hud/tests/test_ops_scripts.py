@@ -24,6 +24,8 @@ SCRIPTS = tuple(
         "daytona-control.sh",
         "daytona-campaign.sh",
         "daytona-lane.sh",
+        "daytona-finalize.sh",
+        "daytona-round-barrier.sh",
         "bootstrap-host.sh",
         "daytona-fleet.sh",
         "install-daytona-fleet.sh",
@@ -230,7 +232,9 @@ def test_daytona_multilane_runner_is_opus5_and_lane_scoped() -> None:
     assert "CG_DAYTONA_JOB_NAME" in campaign
     assert "model arm drifted" in campaign
     assert '"$JOB_NAME"' in campaign
-    assert "cybergym-opus5-cyber-lane-" in lane
+    assert "cybergym-opus5-cyber-pass-" in lane
+    assert 'while [ "$pass_index" -le 3 ]' in lane
+    assert "daytona-finalize" in lane
     assert "CG_DAYTONA_PLAN_DIR" in lane
     assert "CG_DAYTONA_TASK_FILE" in lane
     assert "CG_RESULTS_DIR" in lane
@@ -420,6 +424,7 @@ def test_daytona_fleet_controls_are_durable_and_boundary_safe() -> None:
     assert "RestartSec=60" in installer
     assert "TimeoutStopSec=infinity" in installer
     assert "cybergym-daytona@.service" in installer
+    assert "pass@3" in installer
 
 
 def test_root_readme_is_a_three_key_fresh_ec2_handoff() -> None:
@@ -433,9 +438,27 @@ def test_root_readme_is_a_three_key_fresh_ec2_handoff() -> None:
         "nix run .#daytona -- status",
         "nix run .#daytona -- pause",
         "nix run .#daytona -- resume",
+        "final-hud-reported-4521.json",
+        "final-pass-at-3.json",
     ):
         assert expected in readme
     assert "HUD's AWS account" not in readme
+
+
+def test_pass3_finalizer_is_local_strict_and_exported() -> None:
+    finalizer = (OPS / "daytona-finalize.sh").read_text(encoding="utf-8")
+    dispatcher = (OPS / "cybergym-ops").read_text(encoding="utf-8")
+    flake = (ROOT / "flake.nix").read_text(encoding="utf-8")
+    report = (ROOT / "integrations" / "hud" / "cybergym_hud" / "pass3_report.py").read_text(
+        encoding="utf-8"
+    )
+    assert "cybergym-hud-finalize-pass3" in finalizer
+    assert "daytona-finalize" in dispatcher
+    assert "finalize-pass3" in flake
+    assert "final-hud-reported-4521.json" in report
+    assert "final-pass-at-3.json" in report
+    assert "fetch_job_traces" not in report
+    assert "PlatformClient" not in report
 
 
 def test_nix_apps_export_the_compiler_runtime_for_binary_wheels() -> None:

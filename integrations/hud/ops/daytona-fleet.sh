@@ -1,5 +1,5 @@
 #!/bin/sh
-# Start, inspect, boundary-pause, or resume the complete 24-lane fleet.
+# Start, inspect, boundary-pause, or resume the complete pass@3 fleet.
 set -eu
 set +x
 umask 077
@@ -74,9 +74,13 @@ case "$COMMAND" in
             || { printf '%s\n' 'daytona-fleet: fleet service is not installed' >&2; exit 1; }
         if [ "$COMMAND" = resume ]; then
             lane_ids | while IFS= read -r lane; do
-                run_as_operator python3 "$SCRIPT_DIR/daytona-control.py" clear \
-                    --state-dir "/srv/cybergym/results-og-fidelity/opus5-multilane/lane-$lane/daytona-anthropic/state" \
-                    >/dev/null
+                repeat=1
+                while [ "$repeat" -le 3 ]; do
+                    run_as_operator python3 "$SCRIPT_DIR/daytona-control.py" clear \
+                        --state-dir "/srv/cybergym/results-og-fidelity/opus5-pass3/pass-$repeat/lane-$lane/daytona-anthropic/state" \
+                        >/dev/null
+                    repeat=$((repeat + 1))
+                done
             done
         fi
         lane_ids | while IFS= read -r lane; do
@@ -85,7 +89,7 @@ case "$COMMAND" in
                 systemctl start "cybergym-daytona@$lane.service"
             fi
         done
-        printf 'CyberGym Daytona fleet %s requested for %s lanes. Use `nix run .#daytona -- status`.\n' \
+        printf 'CyberGym Daytona pass@3 fleet %s requested for 3 repeats x %s lanes. Use `nix run .#daytona -- status`.\n' \
             "$COMMAND" "$LANES"
         ;;
 esac

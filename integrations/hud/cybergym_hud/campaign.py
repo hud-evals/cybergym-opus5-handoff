@@ -63,6 +63,10 @@ class CampaignBlocked(RuntimeError):
     """Raised when continuing could repeat spend or amplify infrastructure failure."""
 
 
+class ProviderCreditExhausted(CampaignBlocked):
+    """Raised after an exact provider-credit receipt stops ordinary admissions."""
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -723,7 +727,8 @@ def validate_attempt_result(
         if receipt.get("server") != config.server or receipt.get("run_profile") != expected_profile:
             raise CampaignBlocked(f"HUD native receipt profile drifted for {task_id}")
         imported = run.get("openhands_trace_import")
-        expected_import_status = "completed" if receipt.get("status") == "completed" else "partial_error"
+        refused = receipt.get("status") == "refused"
+        expected_import_status = "completed" if receipt.get("status") in {"completed", "refused"} else "partial_error"
         if not isinstance(imported, dict) or imported.get("status") != expected_import_status:
             raise CampaignBlocked(f"HUD OpenHands transcript import failed for {task_id}")
         digest = imported.get("projected_steps_sha256")
@@ -739,7 +744,7 @@ def validate_attempt_result(
             or any(character not in "0123456789abcdef" for character in digest)
             or not all(isinstance(value, int) and value >= 0 for value in counts)
             or counts[0] != counts[1] + counts[2] + counts[3]
-            or counts[1] < 1
+            or (counts[1] < 1 and not refused)
         ):
             raise CampaignBlocked(f"HUD OpenHands transcript import receipt is invalid for {task_id}")
         observed.append(task_id)
@@ -864,6 +869,13 @@ async def run_campaign(
             job=job,
             prelaunch_verifier=prelaunch_verifier,
         )
+        if any(
+            isinstance(run, dict)
+            and isinstance(run.get("native_receipt"), dict)
+            and run["native_receipt"].get("error") == "Anthropic provider credit is exhausted"
+            for run in (result.get("runs") or [])
+        ):
+            raise ProviderCreditExhausted("Anthropic provider credit is exhausted")
         validate_attempt_result(result, expected_task_ids=pending, config=config, job=job)
         verified = await receipt_verifier(result, results_dir=config.log_dir.parent)
         summary_path = state.shard_summary_dir / (

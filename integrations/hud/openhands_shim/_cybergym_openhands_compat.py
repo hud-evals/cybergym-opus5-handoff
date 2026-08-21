@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import functools
 import ipaddress
+import json
 import os
 import re
 import threading
 from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -27,6 +29,7 @@ DAYTONA_ACTION_URL_ENV = "CYBERGYM_DAYTONA_ACTION_URL"
 ANTHROPIC_MODEL_ENV = "CYBERGYM_ANTHROPIC_MODEL"
 ANTHROPIC_TARGET_MODEL = "claude-opus-5"
 ANTHROPIC_EFFORT_ENV = "CYBERGYM_ANTHROPIC_EFFORT"
+ANTHROPIC_OUTCOME_AUDIT_ENV = "CYBERGYM_ANTHROPIC_OUTCOME_AUDIT"
 ANTHROPIC_SUPPORTED_EFFORT = "low"
 SUPPORTED_EFFORT = "xhigh"
 SUPPORTED_RUNTIME_NETWORK = "cybergym-no-internet"
@@ -36,6 +39,108 @@ SERVED_MODEL_PATTERN = re.compile(r"^gpt-5\.6-sol(?:-\d{4}-\d{2}-\d{2})?$")
 DAYTONA_ACTION_URL_PATTERN = re.compile(r"^http://127\.0\.0\.1:([1-9][0-9]{0,4})$")
 DAYTONA_SIGNED_ACTION_HOST_PATTERN = re.compile(r"^4444-[a-z0-9]+\.daytonaproxy[0-9]+\.net$")
 STANDARD_INPUT_USD_PER_TOKEN = 5.0 / 1_000_000
+
+
+def _plain_provider_response(response: Any) -> Any:
+    if isinstance(response, Mapping):
+        return {str(key): _plain_provider_response(value) for key, value in response.items()}
+    if isinstance(response, list | tuple):
+        return [_plain_provider_response(value) for value in response]
+    model_dump = getattr(response, "model_dump", None)
+    if callable(model_dump):
+        try:
+            return _plain_provider_response(model_dump(mode="json"))
+        except TypeError:
+            return _plain_provider_response(model_dump())
+    return response if isinstance(response, str | int | float | bool) or response is None else str(response)
+
+
+def classify_anthropic_outcome(response: Any) -> dict[str, Any]:
+    """Extract content-free provider identity and explicit safety-stop metadata."""
+
+    payload = _plain_provider_response(response)
+    model = payload.get("model") if isinstance(payload, dict) else None
+    reasons: list[str] = []
+    category: str | None = None
+
+    def walk(value: Any) -> None:
+        nonlocal category
+        if isinstance(value, dict):
+            stop_details = value.get("stop_details")
+            if isinstance(stop_details, dict) and isinstance(stop_details.get("category"), str):
+                category = stop_details["category"]
+            if isinstance(value.get("refusal_category"), str):
+                category = value["refusal_category"]
+            for key, child in value.items():
+                if key in {"stop_reason", "finish_reason"} and isinstance(child, str):
+                    reasons.append(child.lower())
+                walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+
+    walk(payload)
+    refusal_reason = next(
+        (reason for reason in reasons if reason in {"refusal", "content_filter", "safety"}),
+        None,
+    )
+    return {
+        "schema_version": "1",
+        "model": model if isinstance(model, str) and model else None,
+        "classification": "safety_refusal" if refusal_reason is not None else "response",
+        "stop_reason": refusal_reason,
+        "refusal_category": category,
+    }
+
+
+def _record_anthropic_outcome(response: Any) -> None:
+    raw_path = os.environ.get(ANTHROPIC_OUTCOME_AUDIT_ENV)
+    if not raw_path:
+        raise RuntimeError(f"{ANTHROPIC_OUTCOME_AUDIT_ENV} is required")
+    path = Path(raw_path).expanduser().resolve()
+    if not path.parent.is_dir():
+        raise RuntimeError(f"provider outcome audit parent is missing: {path.parent}")
+    _write_anthropic_outcome(classify_anthropic_outcome(response), path)
+
+
+def _write_anthropic_outcome(payload: dict[str, Any], path: Path) -> None:
+    encoded = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        if os.write(descriptor, encoded) != len(encoded):
+            raise RuntimeError("provider outcome audit write was incomplete")
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _is_anthropic_credit_exhausted(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "credit balance is too low" in text or "credit_balance_exhausted" in text
+
+
+def _audited_anthropic_completion(original: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    try:
+        response = original(*args, **kwargs)
+    except Exception as exc:
+        if _is_anthropic_credit_exhausted(exc):
+            raw_path = os.environ.get(ANTHROPIC_OUTCOME_AUDIT_ENV)
+            if not raw_path:
+                raise RuntimeError(f"{ANTHROPIC_OUTCOME_AUDIT_ENV} is required") from exc
+            _write_anthropic_outcome(
+                {
+                    "schema_version": "1",
+                    "model": ANTHROPIC_TARGET_MODEL,
+                    "classification": "provider_credit_exhausted",
+                    "stop_reason": None,
+                    "refusal_category": None,
+                },
+                Path(raw_path).expanduser().resolve(),
+            )
+        raise
+    _record_anthropic_outcome(response)
+    return response
 STANDARD_CACHED_INPUT_USD_PER_TOKEN = 0.5 / 1_000_000
 STANDARD_OUTPUT_USD_PER_TOKEN = 30.0 / 1_000_000
 LONG_CONTEXT_INPUT_THRESHOLD = 272_000
@@ -712,7 +817,12 @@ def _patch_claude_llm_instances(llm: Any) -> None:
         top_p = keywords.pop("top_p", None)
         if isinstance(top_p, bool) or not isinstance(top_p, int | float) or float(top_p) != 1.0:
             raise RuntimeError("pinned OpenHands Claude top_p default drifted")
-        self._completion_unwrapped = functools.partial(original.func, *original.args, **keywords)
+        self._completion_unwrapped = functools.partial(
+            _audited_anthropic_completion,
+            original.func,
+            *original.args,
+            **keywords,
+        )
 
     patched_init._cybergym_claude_opus5 = True
     cls.__init__ = patched_init

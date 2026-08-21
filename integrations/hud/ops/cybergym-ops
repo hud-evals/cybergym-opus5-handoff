@@ -25,6 +25,8 @@ Commands:
   daytona-lane          Run or resume one planned Daytona lane
   daytona-control       Status, boundary-pause, or resume one Daytona lane
   daytona-campaign      Resume the selected direct-Anthropic Daytona campaign
+  daytona-finalize      Finalize the strict local 4,521-row pass@3 ledger
+  daytona-round-barrier Seal one globally complete repeat
   server-status         Show the private server service state
 EOF
 }
@@ -37,7 +39,7 @@ case "$COMMAND" in
     -h|--help|help) usage; exit 0 ;;
     setup) exec "$SCRIPT_DIR/setup.sh" "$@" ;;
     server-status) exec systemctl status --no-pager cybergym-server.service ;;
-    preflight|smoke|campaign-preflight|campaign|daytona-preflight|daytona-ready|daytona-lane|daytona-control|daytona-campaign)
+    preflight|smoke|campaign-preflight|campaign|daytona-preflight|daytona-ready|daytona-lane|daytona-control|daytona-campaign|daytona-finalize|daytona-round-barrier)
         for path in "$SERVER_ENV" "$RUNNER_ENV"; do
             [ -r "$path" ] || { printf 'cybergym-ops: missing readable secret file: %s\n' "$path" >&2; exit 1; }
             mode=$(stat -c '%a' "$path")
@@ -70,7 +72,7 @@ case "$COMMAND" in
             # shellcheck disable=SC1090
             . "$RELAY_ENV"
             set +a
-            case "$COMMAND" in daytona-lane|daytona-control)
+            case "$COMMAND" in daytona-lane|daytona-control|daytona-finalize|daytona-round-barrier)
                 DAYTONA_RUN_ENV=${CYBERGYM_DAYTONA_RUN_ENV:-${XDG_CONFIG_HOME:-$HOME/.config}/cybergym/daytona-run.env}
                 [ -f "$DAYTONA_RUN_ENV" ] \
                     || { printf 'cybergym-ops: run daytona-ready first; missing %s\n' "$DAYTONA_RUN_ENV" >&2; exit 1; }
@@ -94,6 +96,8 @@ case "$COMMAND" in
             daytona-lane) exec "$SCRIPT_DIR/daytona-lane.sh" "$@" ;;
             daytona-control) exec "$SCRIPT_DIR/daytona-control.sh" "$@" ;;
             daytona-campaign) exec "$SCRIPT_DIR/daytona-campaign.sh" "$@" ;;
+            daytona-finalize) exec "$SCRIPT_DIR/daytona-finalize.sh" "$@" ;;
+            daytona-round-barrier) exec "$SCRIPT_DIR/daytona-round-barrier.sh" "$@" ;;
         esac
         ;;
     *) printf 'cybergym-ops: unknown command: %s\n' "$COMMAND" >&2; exit 2 ;;

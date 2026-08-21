@@ -1,4 +1,4 @@
-# CyberGym Claude Opus 5
+# CyberGym Claude Opus 5 pass@3
 
 ## What you need
 
@@ -32,7 +32,7 @@ partial downloads and preserves existing keys and checkpoints.
 ## Run
 
 ```bash
-# Start the paid campaign
+# Start all three paid repeats
 nix run .#daytona -- start
 
 # Show every lane's progress
@@ -49,6 +49,14 @@ Pause never kills an active rollout. Resume never reruns a verified task and
 cannot resume in the middle of a model turn. Results, raw trajectories,
 projections, grader summaries, sandbox ledgers, and campaign manifests remain
 on the EC2 disk and completed job scores are uploaded to HUD.
+
+Each lane completes repeat 1, repeat 2, and repeat 3 in separate durable state
+directories. The last finishing lane automatically writes the strict local
+4,521-row ledger to
+`/srv/cybergym/results-og-fidelity/opus5-pass3/final-hud-reported-4521.json`
+and the aggregate pass@3 report to
+`/srv/cybergym/results-og-fidelity/opus5-pass3/final-pass-at-3.json`. The
+finalizer can also be rerun safely with `nix run .#finalize-pass3`.
 
 ## Rotate keys
 

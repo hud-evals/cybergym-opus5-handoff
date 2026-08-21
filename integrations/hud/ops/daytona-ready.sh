@@ -55,7 +55,7 @@ CG_DAYTONA_TASK_FILE=$task_file
 CG_ARTIFACT_PREFLIGHT_REPORT=$artifact_report
 CG_DAYTONA_PREFLIGHT_REPORT=$daytona_report
 CG_DAYTONA_PLAN_DIR=$plan_dir
-CG_RESULTS_DIR=$RESULTS_DIR/opus5-multilane
+CG_RESULTS_DIR=$RESULTS_DIR/opus5-pass3
 CG_DAYTONA_RELAY_URL=$CG_DAYTONA_RELAY_URL
 CG_DAYTONA_RELAY_CIDRS=$CG_DAYTONA_RELAY_CIDRS
 CG_DAYTONA_MAX_CONCURRENT=8
@@ -64,4 +64,4 @@ EOF
 chmod 0600 "$temporary"
 mv -f "$temporary" "$run_config"
 trap - EXIT HUP INT TERM
-printf 'CyberGym Daytona Opus 5 is ready: 24 lanes x width 8; config=%s\n' "$run_config"
+printf 'CyberGym Daytona Opus 5 pass@3 is ready: 3 repeats x 24 lanes x width 8; config=%s\n' "$run_config"

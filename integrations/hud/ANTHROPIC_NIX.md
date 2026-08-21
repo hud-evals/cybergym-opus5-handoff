@@ -1,4 +1,4 @@
-# CyberGym Claude Opus 5 Nix handoff
+# CyberGym Claude Opus 5 pass@3 Nix handoff
 
 The authoritative fresh-EC2 instructions are in the repository root
 [`README.md`](../../README.md#claude-opus-5-nixdaytona-handoff).
@@ -27,3 +27,9 @@ Pause is applied at shard boundaries. Completed tasks, HUD receipts, raw
 trajectories, projections, grader summaries, and sandbox ledgers remain in the
 lane's durable state and result directories. Resume reconciles those records
 before it starts pending work.
+
+The 24 services each own three repeat-scoped manifests. Completion produces an
+exact local 1,507-task x 3-repeat ledger and `final-pass-at-3.json`; malformed,
+missing, nonnumeric, or infrastructure-error grades are rejected rather than
+counted. `nix run .#finalize-pass3` safely recomputes the report without a model
+call or HUD polling.

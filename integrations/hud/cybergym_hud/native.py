@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib.util
 import json
 import os
@@ -430,6 +431,7 @@ class _OpenHandsSubprocessProxy:
         server: str | None = None,
         daytona_ledger_path: Path | None = None,
         daytona_known_hosts: Path | None = None,
+        provider_outcome_audit_path: Path | None = None,
     ) -> None:
         self._delegate = delegate
         self._shim_dir = shim_dir
@@ -442,6 +444,7 @@ class _OpenHandsSubprocessProxy:
         self._server = server
         self._daytona_ledger_path = daytona_ledger_path
         self._daytona_known_hosts = daytona_known_hosts
+        self._provider_outcome_audit_path = provider_outcome_audit_path
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._delegate, name)
@@ -481,6 +484,8 @@ class _OpenHandsSubprocessProxy:
             if self._anthropic_effort != "low":
                 raise RuntimeError("Claude Opus 5 child is missing its fixed adaptive effort")
             child_env["CYBERGYM_ANTHROPIC_EFFORT"] = self._anthropic_effort
+            if self._provider_outcome_audit_path is not None:
+                child_env["CYBERGYM_ANTHROPIC_OUTCOME_AUDIT"] = str(self._provider_outcome_audit_path)
         if self._execution_backend == "daytona-private":
             if (
                 self._task_id is None
@@ -650,6 +655,12 @@ def execute_upstream_openhands(
 
     config = config.normalized()
     run_profile = config.receipt_profile()
+    provider_outcome_audit_path = (
+        config.log_dir
+        / f".provider-outcomes-{binding.task_id.replace(':', '_')}-{uuid4().hex}.jsonl"
+        if config.model == "claude-opus-5"
+        else None
+    )
     if binding.server != config.server:
         return NativeReceipt(
             status="error",
@@ -703,6 +714,7 @@ def execute_upstream_openhands(
             server=binding.server,
             daytona_ledger_path=config.daytona_ledger_path,
             daytona_known_hosts=config.daytona_known_hosts,
+            provider_outcome_audit_path=provider_outcome_audit_path,
         )
     fresh_uuid = uuid_factory()
     agent_id = fresh_uuid.hex
@@ -803,6 +815,43 @@ def execute_upstream_openhands(
         if config.reasoning_effort or runtime_kwargs is not None or config.execution_backend == "daytona-private":
             upstream.subprocess = original_subprocess
 
+    provider_outcome: dict[str, str | None] | None = None
+    if provider_outcome_audit_path is not None and provider_outcome_audit_path.is_file():
+        before = provider_outcome_audit_path.lstat()
+        if not stat.S_ISREG(before.st_mode) or before.st_mode & 0o077 or before.st_size > 1024 * 1024:
+            raise RuntimeError("provider outcome audit is not a private bounded regular file")
+        lines = [line for line in provider_outcome_audit_path.read_text(encoding="utf-8").splitlines() if line]
+        for line in lines:
+            row = json.loads(line)
+            if not isinstance(row, dict) or set(row) != {
+                "schema_version",
+                "model",
+                "classification",
+                "stop_reason",
+                "refusal_category",
+            }:
+                raise RuntimeError("provider outcome audit shape drifted")
+            model = row.get("model")
+            if isinstance(model, str) and model.startswith("anthropic/"):
+                model = model.split("/", 1)[1]
+            if model != config.model and not (isinstance(model, str) and model.startswith(f"{config.model}-")):
+                raise RuntimeError("provider outcome audit served-model identity drifted")
+            classification = row.get("classification")
+            stop_reason = row.get("stop_reason")
+            category = row.get("refusal_category")
+            if (
+                row.get("schema_version") != "1"
+                or classification not in {"response", "safety_refusal", "provider_credit_exhausted"}
+                or (stop_reason is not None and not isinstance(stop_reason, str))
+                or (category is not None and not isinstance(category, str))
+            ):
+                raise RuntimeError("provider outcome audit values drifted")
+            provider_outcome = {
+                "classification": str(classification),
+                "stop_reason": str(stop_reason) if stop_reason is not None else None,
+                "refusal_category": str(category) if category is not None else None,
+            }
+
     if trace_setup_failed:
         return NativeReceipt(
             status="error",
@@ -812,6 +861,39 @@ def execute_upstream_openhands(
             agent_id=agent_id,
             log_dir=str(receipt_log_dir),
             error="OpenHands HUD trajectory projection could not start; inspect the private rollout log",
+        )
+    if provider_outcome is not None and provider_outcome["classification"] == "provider_credit_exhausted":
+        return NativeReceipt(
+            status="error",
+            task_id=binding.task_id,
+            server=binding.server,
+            run_profile=run_profile,
+            agent_id=agent_id,
+            log_dir=str(receipt_log_dir),
+            error="Anthropic provider credit is exhausted",
+        )
+    if provider_outcome is not None and provider_outcome["classification"] == "safety_refusal":
+        stop_reason = provider_outcome["stop_reason"]
+        if stop_reason not in {"refusal", "content_filter", "safety"}:
+            raise RuntimeError("provider safety refusal omitted an explicit stop reason")
+        if returned is None and _wait_for_volume_trajectory(receipt_log_dir):
+            returned = agent_id
+        if returned != agent_id:
+            raise RuntimeError("provider safety refusal has no matching saved trajectory")
+        controller_termination = _controller_termination(receipt_log_dir, max_iter=config.max_iter)
+        return NativeReceipt(
+            status="refused",
+            task_id=binding.task_id,
+            server=binding.server,
+            run_profile=run_profile,
+            agent_id=agent_id,
+            upstream_returned_agent_id=returned,
+            log_dir=str(receipt_log_dir),
+            controller_termination=controller_termination,
+            provider_outcome_audit_path=str(provider_outcome_audit_path),
+            provider_outcome_audit_sha256=hashlib.sha256(provider_outcome_audit_path.read_bytes()).hexdigest(),
+            provider_stop_reason=stop_reason,
+            provider_refusal_category=provider_outcome["refusal_category"] or "unspecified",
         )
     if upstream_error is not None:
         detail = " and HUD trajectory projection failed" if trace_projection_failed else ""
@@ -1034,8 +1116,6 @@ async def _run_and_record(
     trajectory_exists = bool(projection_receipt.log_dir and (Path(projection_receipt.log_dir) / "trajectory").exists())
     if projection_receipt.status == "completed" or trajectory_exists or live_projections:
         try:
-            if len(live_projections) != 1:
-                raise RuntimeError("native executor did not return one final live trace projection")
             if projection_receipt.log_dir is None:
                 raise RuntimeError("native receipt has no OpenHands log directory")
             receipt_log_dir = Path(projection_receipt.log_dir).expanduser().resolve()
@@ -1043,31 +1123,40 @@ async def _run_and_record(
                 receipt_log_dir.relative_to(config.log_dir.expanduser().resolve())
             except ValueError as exc:
                 raise RuntimeError("native receipt log directory escaped the configured log root") from exc
-            live_steps = live_projections[0]
-            live_metadata = build_trace_import_metadata(
-                live_steps,
-                status=("completed" if projection_receipt.status == "completed" else "partial_error"),
+            redactions = (
+                *runtime_secret_values(),
+                *(value for value in (config.llm_api_key,) if value),
             )
-            live_metadata["saved_trajectory_reconciled"] = trajectory_exists
-            if trajectory_exists:
+            if len(live_projections) == 0 and projection_receipt.status == "refused" and trajectory_exists:
+                imported = import_openhands_trace(projection_receipt, redactions=redactions)
+                import_metadata = dict(imported.metadata)
+                import_metadata["saved_trajectory_reconciled"] = True
+            else:
+                if len(live_projections) != 1:
+                    raise RuntimeError("native executor did not return one final live trace projection")
+                live_steps = live_projections[0]
+                live_metadata = build_trace_import_metadata(
+                    live_steps,
+                    status=(
+                        "completed"
+                        if projection_receipt.status in {"completed", "refused"}
+                        else "partial_error"
+                    ),
+                )
+                live_metadata["saved_trajectory_reconciled"] = trajectory_exists
+                if trajectory_exists:
                 # The OpenHands args already bind task_id and exact-redact
                 # server, agent_id, and checksum.  The runtime workspace is correctly
                 # root-owned and can be unreadable by the unprivileged host
                 # controller, so do not make transcript reconciliation depend
                 # on rereading its generated submit.sh.
-                imported = import_openhands_trace(
-                    projection_receipt,
-                    redactions=(
-                        *runtime_secret_values(),
-                        *(value for value in (config.llm_api_key,) if value),
-                    ),
-                )
-                if tuple(item.key for item in live_steps) != tuple(item.key for item in imported.steps):
-                    raise RuntimeError("live and saved OpenHands projections disagree on step identities")
-                for digest_name in ("projected_steps_sha256", "projected_events_sha256"):
-                    if live_metadata[digest_name] != imported.metadata.get(digest_name):
-                        raise RuntimeError(f"live and saved OpenHands projections disagree on {digest_name}")
-            import_metadata = live_metadata
+                    imported = import_openhands_trace(projection_receipt, redactions=redactions)
+                    if tuple(item.key for item in live_steps) != tuple(item.key for item in imported.steps):
+                        raise RuntimeError("live and saved OpenHands projections disagree on step identities")
+                    for digest_name in ("projected_steps_sha256", "projected_events_sha256"):
+                        if live_metadata[digest_name] != imported.metadata.get(digest_name):
+                            raise RuntimeError(f"live and saved OpenHands projections disagree on {digest_name}")
+                import_metadata = live_metadata
         except Exception as exc:
             diagnostic = (
                 f"{type(exc).__name__}: OpenHands trajectory import failed: {exc}; inspect private rollout logs"

@@ -128,6 +128,8 @@
           daytona-plan = mkOperatorApp pkgs "daytona-plan" "integrations/hud/ops/plan-daytona-lanes.py";
           daytona-lane = mkDispatcherApp pkgs "daytona-lane" "daytona-lane";
           daytona = mkOperatorApp pkgs "daytona" "integrations/hud/ops/daytona-fleet.sh";
+          finalize-pass3 = mkDispatcherApp pkgs "finalize-pass3" "daytona-finalize";
+          round-barrier = mkDispatcherApp pkgs "round-barrier" "daytona-round-barrier";
           install-corpus = mkOperatorApp pkgs "install-corpus" "integrations/hud/ops/install-corpus.py";
           install-relay = mkOperatorApp pkgs "install-relay" "integrations/hud/ops/install-relay.sh";
           reconcile = mkOperatorApp pkgs "reconcile" "integrations/hud/ops/reconcile.sh";

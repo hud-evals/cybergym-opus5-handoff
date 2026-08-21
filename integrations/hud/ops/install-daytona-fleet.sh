@@ -33,7 +33,7 @@ TMP=$(mktemp /etc/systemd/system/.cybergym-daytona.XXXXXX)
 trap 'rm -f "$TMP"' EXIT HUP INT TERM
 cat >"$TMP" <<EOF
 [Unit]
-Description=CyberGym Daytona Opus 5 lane %i
+Description=CyberGym Daytona Opus 5 pass@3 lane %i
 After=network-online.target cybergym-server.service cybergym-daytona-relay.service cybergym-caddy.service
 Requires=cybergym-server.service cybergym-daytona-relay.service cybergym-caddy.service
 StartLimitIntervalSec=0

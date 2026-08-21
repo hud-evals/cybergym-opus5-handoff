@@ -15,6 +15,7 @@ from typing import Any
 
 from .campaign import (
     CampaignBlocked,
+    ProviderCreditExhausted,
     _catalog_digest,
     campaign_lock,
     load_preflight_fingerprints,
@@ -31,6 +32,7 @@ from .native import (
     CAMPAIGN_RUNTIME_NANO_CPUS,
     NativeOpenHandsConfig,
 )
+from .provider_control import record_provider_result, wait_for_provider_admission
 from .taskset import task_ids as catalog_task_ids
 
 JOB_NAME = "cybergym-opus5-cyber"
@@ -270,6 +272,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-concurrent", type=int, default=60)
     parser.add_argument("--shard-size", type=int, default=60)
     parser.add_argument("--keep-tmp", action="store_true")
+    parser.add_argument("--provider-control-root", type=Path, required=True)
+    parser.add_argument("--provider-retry-seconds", type=float, default=300.0)
     return parser
 
 
@@ -323,6 +327,8 @@ def main() -> None:
     ).normalized()
     config.log_dir.mkdir(parents=True, exist_ok=True)
     config.tmp_dir.mkdir(parents=True, exist_ok=True)
+    control_root = args.provider_control_root.expanduser().resolve()
+    lease = wait_for_provider_admission(control_root)
     try:
         with campaign_lock(state_dir):
             reconcile_daytona_sandboxes(
@@ -348,8 +354,18 @@ def main() -> None:
                     pause_file=state_dir / "pause.requested",
                 )
             )
+    except ProviderCreditExhausted as exc:
+        record_provider_result(
+            control_root,
+            lease,
+            credit_exhausted=True,
+            retry_seconds=args.provider_retry_seconds,
+        )
+        raise SystemExit(f"Daytona campaign blocked: {exc}") from exc
     except CampaignBlocked as exc:
         raise SystemExit(f"Daytona campaign blocked: {exc}") from exc
+    else:
+        record_provider_result(control_root, lease, credit_exhausted=False)
     summary["canonical_completed_before_handoff"] = canonical_completed
     print(json.dumps(summary, indent=2, sort_keys=True))
 

@@ -71,7 +71,7 @@ class NativeReceipt(BaseModel):
 
     schema_version: Literal["1"] = "1"
     runner: Literal["upstream-openhands-0.33-native"] = "upstream-openhands-0.33-native"
-    status: Literal["completed", "error"]
+    status: Literal["completed", "refused", "error"]
     task_id: str = Field(pattern=r"^(arvo|oss-fuzz):[^:]+$")
     server: str
     run_profile: NativeRunProfile
@@ -81,16 +81,35 @@ class NativeReceipt(BaseModel):
     controller_termination: (
         Literal["finished", "rejected", "max_iterations", "stuck_loop", "max_output_tokens_exhausted"] | None
     ) = None
+    provider_outcome_audit_path: str | None = None
+    provider_outcome_audit_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    provider_stop_reason: Literal["refusal", "content_filter", "safety"] | None = None
+    provider_refusal_category: str | None = None
     error: str | None = None
 
     @model_validator(mode="after")
     def _coherent(self) -> NativeReceipt:
         self.server = normalize_server(self.server)
-        if self.status == "completed":
+        if self.status in {"completed", "refused"}:
             if not self.agent_id or self.upstream_returned_agent_id != self.agent_id:
-                raise ValueError("completed receipt requires the matching upstream agent ID")
+                raise ValueError("terminal receipt requires the matching upstream agent ID")
             if self.error is not None:
-                raise ValueError("completed receipt cannot contain an error")
+                raise ValueError("terminal receipt cannot contain an error")
+            if self.status == "refused" and (
+                not self.provider_outcome_audit_path
+                or not self.provider_outcome_audit_sha256
+                or not self.provider_stop_reason
+                or not self.provider_refusal_category
+            ):
+                raise ValueError("refused receipt requires a hash-bound explicit provider outcome")
+            if self.status == "completed" and any(
+                value is not None
+                for value in (
+                    self.provider_stop_reason,
+                    self.provider_refusal_category,
+                )
+            ):
+                raise ValueError("completed receipt cannot claim a provider refusal")
         elif not self.error:
             raise ValueError("error receipt requires a diagnostic")
         return self

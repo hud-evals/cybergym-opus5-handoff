@@ -124,6 +124,7 @@ class DecodedOpenHandsEvent:
     reasoning: str | None = None
     usage: Usage | None = None
     finish_reason: str | None = None
+    refusal: str | None = None
     total_calls: int | None = None
     success: bool | None = None
 
@@ -379,8 +380,9 @@ def _normalize_projection_timestamps(steps: Sequence[ProjectedStep]) -> tuple[Pr
 class OpenHandsEventProjector:
     """Decode and project append-only OpenHands trajectory event objects."""
 
-    def __init__(self, *, redactions: Iterable[str] = ()) -> None:
+    def __init__(self, *, redactions: Iterable[str] = (), allow_empty_agent_messages: bool = False) -> None:
         self._redactor = _Redactor(redactions)
+        self._allow_empty_agent_messages = allow_empty_agent_messages
 
     def decode(self, raw: object, *, origin: str) -> DecodedOpenHandsEvent:
         event = _mapping(raw, label=f"{origin} event")
@@ -402,6 +404,12 @@ class OpenHandsEventProjector:
             return DecodedOpenHandsEvent(event_id, timestamp, "user", text=self._redactor.text(text))
         if source == "agent" and action == "message" and event.get("tool_call_metadata") is None:
             args = _mapping(event.get("args"), label=f"{origin} agent message {event_id} args")
+            if self._allow_empty_agent_messages and args.get("content") == "":
+                return DecodedOpenHandsEvent(
+                    event_id,
+                    timestamp,
+                    "skip",
+                )
             text = _string(args.get("content"), label=f"{origin} agent message {event_id} content")
             if not text.strip():
                 raise TraceImportError(f"{origin} agent message {event_id} content is blank")
@@ -719,6 +727,7 @@ class OpenHandsEventProjector:
                         f"agent-message:{event.event_id}",
                         AgentStep(
                             content=event.text,
+                            refusal=event.refusal,
                             done=False,
                             started_at=event.timestamp,
                             ended_at=event.timestamp,
@@ -816,7 +825,7 @@ def _projected_event_view(item: ProjectedStep) -> dict[str, Any]:
     if step.source == "user":
         return {"kind": "user_message", "text": _visible_user_text(step)}
     if isinstance(step, AgentStep):
-        return {
+        view = {
             "kind": "agent_message",
             "text": step.content,
             "reasoning": step.reasoning,
@@ -829,6 +838,9 @@ def _projected_event_view(item: ProjectedStep) -> dict[str, Any]:
                 for call in step.tool_calls
             ],
         }
+        if step.refusal is not None:
+            view["refusal"] = step.refusal
+        return view
     if isinstance(step, ToolStep) and step.call is not None and step.result is not None:
         result = step.result.model_dump(mode="json", exclude_none=True)
         result_text, result_data = _normalize_mcp_result(result)
@@ -863,12 +875,15 @@ def _remote_event_view(event: Mapping[str, Any]) -> dict[str, Any]:
                     "arguments": raw_call.get("arguments") or {},
                 }
             )
-        return {
+        view = {
             "kind": kind,
             "text": event.get("text"),
             "reasoning": event.get("reasoning"),
             "tool_calls": calls,
         }
+        if event.get("refusal") is not None:
+            view["refusal"] = event.get("refusal")
+        return view
     if kind == "tool_call":
         return {
             "kind": kind,
@@ -949,18 +964,29 @@ def import_openhands_trace(
     raw_events = _read_regular_json(log_dir / "trajectory", label="OpenHands trajectory")
     if not isinstance(raw_events, list) or not raw_events:
         raise TraceImportError("OpenHands trajectory must be a nonempty event list")
-    projector = OpenHandsEventProjector(redactions=all_redactions)
+    projector = OpenHandsEventProjector(
+        redactions=all_redactions,
+        allow_empty_agent_messages=receipt.status == "refused",
+    )
     decoded_events = tuple(projector.decode(raw_event, origin="trajectory") for raw_event in raw_events)
     first_visible = decoded_events[0]
     if first_visible is None or first_visible.kind != "user" or first_visible.text != OG_PROMPT:
         raise TraceImportError("OpenHands first user event is not the pinned OG prompt")
+    projected_events = decoded_events
+    if receipt.status == "refused":
+        projected_events = tuple(
+            DecodedOpenHandsEvent(event.event_id, event.timestamp, "skip")
+            if index > 0 and event.kind == "user"
+            else event
+            for index, event in enumerate(decoded_events)
+        )
     steps = projector.project(
-        decoded_events,
-        final=receipt.status == "completed",
+        projected_events,
+        final=receipt.status in {"completed", "refused"},
         skip_initial_user_prompt=None if include_initial_user_prompt else OG_PROMPT,
     )
     agent_count = sum(isinstance(item.step, AgentStep) for item in steps)
-    if agent_count < 1:
+    if agent_count < 1 and receipt.status != "refused":
         raise TraceImportError("OpenHands trajectory has no model-visible assistant turn")
     # A canonical max-iteration, stuck-loop, or rejected controller terminal
     # is a normal, gradeable CyberGym endpoint even though CodeAct did not emit
@@ -971,7 +997,7 @@ def import_openhands_trace(
     # distinguishes an explicit finish from a controller terminal.
     metadata = build_trace_import_metadata(
         steps,
-        status="completed" if receipt.status == "completed" else "partial_error",
+        status="completed" if receipt.status in {"completed", "refused"} else "partial_error",
     )
     return TraceImportResult(
         steps=steps,
@@ -999,6 +1025,7 @@ def validate_remote_trace_projection(events: Sequence[Mapping[str, Any]]) -> dic
     """Validate that a terminal remote HUD trace contains the imported transcript."""
 
     receipts: list[Mapping[str, Any]] = []
+    native_receipts: list[Mapping[str, Any]] = []
     for event in events:
         candidates: list[object] = [event, event.get("extra"), event.get("attributes")]
         attributes = event.get("attributes")
@@ -1007,10 +1034,17 @@ def validate_remote_trace_projection(events: Sequence[Mapping[str, Any]]) -> dic
             payload = attributes.get("hud.payload")
             if isinstance(payload, Mapping):
                 candidates.append(payload.get("extra"))
+        found_receipt = False
         for candidate in candidates:
-            if isinstance(candidate, Mapping) and isinstance(candidate.get("openhands_trace_import"), Mapping):
-                receipts.append(candidate["openhands_trace_import"])
-                break
+            if isinstance(candidate, Mapping):
+                if isinstance(candidate.get("openhands_trace_import"), Mapping):
+                    receipts.append(candidate["openhands_trace_import"])
+                    found_receipt = True
+                if isinstance(candidate.get("native_openhands_receipt"), Mapping):
+                    native_receipts.append(candidate["native_openhands_receipt"])
+                    found_receipt = True
+                if found_receipt:
+                    break
     if len(receipts) != 1:
         raise TraceImportError("remote HUD trace does not contain exactly one trajectory import receipt")
     receipt = receipts[0]
@@ -1033,8 +1067,20 @@ def validate_remote_trace_projection(events: Sequence[Mapping[str, Any]]) -> dic
     remote_agents = [event for event in events if event.get("kind") == "agent_message"]
     remote_tools = [event for event in events if event.get("kind") == "tool_call"]
     remote_users = [event for event in events if event.get("kind") == "user_message"] if user_count else []
-    if not remote_agents or any(
-        not (event.get("text") or event.get("reasoning") or event.get("tool_calls")) for event in remote_agents
+    refused = (
+        len(native_receipts) == 1
+        and native_receipts[0].get("status") == "refused"
+        and native_receipts[0].get("provider_stop_reason") in {"refusal", "content_filter", "safety"}
+        and isinstance(native_receipts[0].get("provider_outcome_audit_sha256"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", native_receipts[0]["provider_outcome_audit_sha256"]) is not None
+    )
+    incomplete_agents = [
+        event
+        for event in remote_agents
+        if not (event.get("text") or event.get("reasoning") or event.get("tool_calls"))
+    ]
+    if (not refused and (not remote_agents or incomplete_agents)) or (
+        refused and (agent_count != 0 or remote_agents)
     ):
         raise TraceImportError("remote HUD trace has no complete model-visible assistant transcript")
     if (

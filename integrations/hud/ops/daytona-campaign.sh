@@ -14,6 +14,7 @@ RESULTS_DIR=${CG_RESULTS_DIR:-}
 TASK_FILE=${CG_DAYTONA_TASK_FILE:-}
 ARTIFACT_REPORT=${CG_ARTIFACT_PREFLIGHT_REPORT:-}
 DAYTONA_REPORT=${CG_DAYTONA_PREFLIGHT_REPORT:-$RESULTS_DIR/daytona-anthropic/preflight.json}
+PROVIDER_CONTROL_ROOT=${CG_DAYTONA_PROVIDER_CONTROL_ROOT:-}
 KNOWN_HOSTS=${CG_DAYTONA_KNOWN_HOSTS:-$REPOSITORY_ROOT/integrations/hud/daytona_known_hosts.txt}
 MAX_CONCURRENT=${CG_DAYTONA_MAX_CONCURRENT:-60}
 SHARD_SIZE=${CG_DAYTONA_SHARD_SIZE:-60}
@@ -37,6 +38,7 @@ while [ "$#" -gt 0 ]; do
     *) printf 'daytona-campaign: unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
+[ -n "$PROVIDER_CONTROL_ROOT" ] || { printf '%s\n' 'daytona-campaign: CG_DAYTONA_PROVIDER_CONTROL_ROOT is required' >&2; exit 1; }
 
 [ "$CONFIRM" -eq 1 ] || { printf '%s\n' 'daytona-campaign: explicit paid selection confirmation is required' >&2; exit 1; }
 for value in "$DATA_DIR" "$SERVER_URL" "$RESULTS_DIR" "$TASK_FILE" "$ARTIFACT_REPORT"; do
@@ -45,7 +47,7 @@ done
 [ "${CG_MODEL:-claude-opus-5}" = claude-opus-5 ] || { printf '%s\n' 'daytona-campaign: model arm drifted' >&2; exit 1; }
 [ -z "${CG_REASONING_EFFORT-}" ] || { printf '%s\n' 'daytona-campaign: reasoning arm drifted' >&2; exit 1; }
 case "$JOB_NAME" in
-  cybergym-opus5-cyber|cybergym-opus5-cyber-lane-[0-9][0-9][0-9]) ;;
+  cybergym-opus5-cyber|cybergym-opus5-cyber-lane-[0-9][0-9][0-9]|cybergym-opus5-cyber-pass-[123]-lane-[0-9][0-9][0-9]) ;;
   *) printf '%s\n' 'daytona-campaign: HUD Job name drifted' >&2; exit 1 ;;
 esac
 
@@ -66,4 +68,6 @@ exec "$UV_BIN" run --frozen --no-sync --project "$REPOSITORY_ROOT/integrations/h
   --daytona-preflight-report "$DAYTONA_REPORT" \
   --daytona-known-hosts "$KNOWN_HOSTS" \
   --max-concurrent "$MAX_CONCURRENT" \
-  --shard-size "$SHARD_SIZE"
+  --shard-size "$SHARD_SIZE" \
+  --provider-control-root "$PROVIDER_CONTROL_ROOT" \
+  --provider-retry-seconds "${CG_DAYTONA_PROVIDER_RETRY_SECONDS:-300}"

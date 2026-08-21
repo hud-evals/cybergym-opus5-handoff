@@ -34,6 +34,27 @@ task_file=$PLAN_DIR/lane-$lane.txt
 [ -f "$task_file" ] && [ ! -L "$task_file" ] || { printf '%s\n' 'daytona-lane: planned task file is missing' >&2; exit 1; }
 
 export CG_DAYTONA_TASK_FILE=$task_file
-export CG_DAYTONA_JOB_NAME=cybergym-opus5-cyber-lane-$lane
-export CG_RESULTS_DIR=$RESULTS_ROOT/lane-$lane
-exec "$SCRIPT_DIR/daytona-campaign.sh" --confirm-paid-selection
+export CG_DAYTONA_PROVIDER_CONTROL_ROOT=$RESULTS_ROOT/control
+
+pass_index=1
+while [ "$pass_index" -le 3 ]; do
+  export CG_DAYTONA_JOB_NAME=cybergym-opus5-cyber-pass-$pass_index-lane-$lane
+  export CG_RESULTS_DIR=$RESULTS_ROOT/pass-$pass_index/lane-$lane
+  "$SCRIPT_DIR/daytona-campaign.sh" --confirm-paid-selection
+  if [ -f "$CG_RESULTS_DIR/daytona-anthropic/state/pause.requested" ]; then
+    printf 'CyberGym lane %s paused after repeat %s checkpoint.\n' "$lane" "$pass_index"
+    exit 0
+  fi
+  while :; do
+    if CG_RESULTS_DIR="$RESULTS_ROOT" "$SCRIPT_DIR/daytona-round-barrier.sh" --pass-index "$pass_index"; then
+      break
+    else
+      barrier_status=$?
+    fi
+    [ "$barrier_status" -eq 75 ] || exit "$barrier_status"
+    sleep 30
+  done
+  pass_index=$((pass_index + 1))
+done
+
+exec "$SCRIPT_DIR/cybergym-ops" daytona-finalize
