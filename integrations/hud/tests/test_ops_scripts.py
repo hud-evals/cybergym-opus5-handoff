@@ -398,6 +398,9 @@ def test_fresh_host_installer_is_resumable_and_verifies_public_artifacts() -> No
     assert "Protected key configuration already exists" in bootstrap
     assert 'LD_LIBRARY_PATH="${LD_LIBRARY_PATH-}"' in bootstrap
     assert 'runuser -u "$OPERATOR" -- git -C "$REPOSITORY_ROOT" status' in bootstrap
+    session = (OPS / "bootstrap-session.sh").read_text(encoding="utf-8")
+    assert '"$SCRIPT_DIR/bootstrap-host.sh"' in session
+    assert 'command="cd $quoted_root && nix run .#bootstrap"' not in session
 
 
 def test_public_relay_exposes_only_task_scoped_https() -> None:

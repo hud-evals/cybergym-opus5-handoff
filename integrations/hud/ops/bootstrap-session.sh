@@ -31,7 +31,8 @@ rm -f "$EXIT_RECEIPT"
 
 printf -v quoted_root '%q' "$REPOSITORY_ROOT"
 printf -v quoted_receipt '%q' "$EXIT_RECEIPT"
-command="cd $quoted_root && nix run .#bootstrap"
+printf -v quoted_bootstrap '%q' "$SCRIPT_DIR/bootstrap-host.sh"
+command="cd $quoted_root && $quoted_bootstrap"
 if [ "$#" -gt 0 ]; then
     command+=" --"
     for argument in "$@"; do
