@@ -500,6 +500,13 @@ def test_pulled_opus_pass1_complement_is_exact() -> None:
     assert "continue-pass3" in flake
 
 
+def test_daytona_provider_probe_preserves_the_built_openhands_cache() -> None:
+    campaign = (ROOT / "integrations" / "hud" / "cybergym_hud" / "daytona_campaign.py").read_text(
+        encoding="utf-8"
+    )
+    assert '"XDG_CACHE_HOME",' in campaign
+
+
 def test_private_server_is_unmasked_and_internal_network_only() -> None:
     server = (OPS / "server.sh").read_text(encoding="utf-8")
     installer = (OPS / "install-service.sh").read_text(encoding="utf-8")

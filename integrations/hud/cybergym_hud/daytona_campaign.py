@@ -228,6 +228,7 @@ def _require_openhands_bridge(repository_root: Path) -> None:
             "LC_ALL",
             "SSL_CERT_FILE",
             "REQUESTS_CA_BUNDLE",
+            "XDG_CACHE_HOME",
             "POETRY_CACHE_DIR",
             "POETRY_VIRTUALENVS_PATH",
         }
