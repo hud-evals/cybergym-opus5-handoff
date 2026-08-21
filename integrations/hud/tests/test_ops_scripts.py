@@ -27,6 +27,7 @@ SCRIPTS = tuple(
         "daytona-finalize.sh",
         "daytona-round-barrier.sh",
         "run-missing-pass1.sh",
+        "continue-pass3.sh",
         "bootstrap-host.sh",
         "daytona-fleet.sh",
         "install-daytona-fleet.sh",
@@ -482,6 +483,11 @@ def test_pulled_opus_pass1_complement_is_exact() -> None:
     wrapper = (OPS / "run-missing-pass1.sh").read_text(encoding="utf-8")
     assert "--confirm-spend YES" in wrapper
     assert "opus5-missing-pass1-tasks.txt" in wrapper
+    continuation = (OPS / "continue-pass3.sh").read_text(encoding="utf-8")
+    assert "for pass_index in 2 3" in continuation
+    assert "cybergym-opus5-cyber-pass-$pass_index" in continuation
+    assert "run-missing-pass1.sh" not in continuation
+    assert "continue-pass3" in flake
 
 
 def test_private_server_is_unmasked_and_internal_network_only() -> None:

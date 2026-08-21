@@ -129,6 +129,7 @@
           daytona-lane = mkDispatcherApp pkgs "daytona-lane" "daytona-lane";
           daytona = mkOperatorApp pkgs "daytona" "integrations/hud/ops/daytona-fleet.sh";
           run-missing-pass1 = mkDispatcherApp pkgs "run-missing-pass1" "daytona-missing-pass1";
+          continue-pass3 = mkDispatcherApp pkgs "continue-pass3" "daytona-continue-pass3";
           finalize-pass3 = mkDispatcherApp pkgs "finalize-pass3" "daytona-finalize";
           round-barrier = mkDispatcherApp pkgs "round-barrier" "daytona-round-barrier";
           install-corpus = mkOperatorApp pkgs "install-corpus" "integrations/hud/ops/install-corpus.py";

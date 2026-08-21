@@ -85,6 +85,17 @@ nix run .#run-missing-pass1 -- --confirm-spend YES
 This selected campaign checkpoints locally and is safe to resume with the same
 command. Error, partial, and empty pulled traces remain in the missing list.
 
+After pass@1 finishes and its scores are visible on HUD, run only the two
+remaining full-catalog rounds with:
+
+```bash
+nix run .#continue-pass3 -- --confirm-spend YES
+```
+
+This command never starts pass@1. It runs round 2 as
+`cybergym-opus5-cyber-pass-2`, then round 3 as
+`cybergym-opus5-cyber-pass-3`, with separate restart-safe local state.
+
 ## Results
 
 The finalizer runs automatically after the last attempt. It can also be safely

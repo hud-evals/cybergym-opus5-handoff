@@ -47,7 +47,7 @@ done
 [ "${CG_MODEL:-claude-opus-5}" = claude-opus-5 ] || { printf '%s\n' 'daytona-campaign: model arm drifted' >&2; exit 1; }
 [ -z "${CG_REASONING_EFFORT-}" ] || { printf '%s\n' 'daytona-campaign: reasoning arm drifted' >&2; exit 1; }
 case "$JOB_NAME" in
-  cybergym-opus5-cyber|cybergym-opus5-cyber-lane-[0-9][0-9][0-9]|cybergym-opus5-cyber-pass-[123]-lane-[0-9][0-9][0-9]) ;;
+  cybergym-opus5-cyber|cybergym-opus5-cyber-pass-[23]|cybergym-opus5-cyber-lane-[0-9][0-9][0-9]|cybergym-opus5-cyber-pass-[123]-lane-[0-9][0-9][0-9]) ;;
   *) printf '%s\n' 'daytona-campaign: HUD Job name drifted' >&2; exit 1 ;;
 esac
 
