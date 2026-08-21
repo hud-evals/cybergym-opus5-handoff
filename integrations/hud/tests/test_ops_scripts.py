@@ -487,6 +487,10 @@ def test_pulled_opus_pass1_complement_is_exact() -> None:
     wrapper = (OPS / "run-missing-pass1.sh").read_text(encoding="utf-8")
     assert "--confirm-spend YES" in wrapper
     assert "opus5-missing-pass1-tasks.txt" in wrapper
+    assert "opus5-pass3/private-inputs" in wrapper
+    assert 'chmod 600 "$temporary_task_file"' in wrapper
+    assert 'cmp -s "$TASK_FILE" "$temporary_task_file"' in wrapper
+    assert "CG_DAYTONA_TASK_FILE=$private_task_file" in wrapper
     continuation = (OPS / "continue-pass3.sh").read_text(encoding="utf-8")
     assert "for pass_index in 2 3" in continuation
     assert "cybergym-opus5-cyber-pass-$pass_index" in continuation

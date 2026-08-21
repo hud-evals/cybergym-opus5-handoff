@@ -26,7 +26,22 @@ usage() {
   || { printf '%s\n' 'Daytona preflight report is missing' >&2; exit 1; }
 
 production_root=$CG_RESULTS_DIR
-CG_DAYTONA_TASK_FILE=$TASK_FILE
+private_input_dir=$production_root/opus5-pass3/private-inputs
+[ ! -L "$private_input_dir" ] \
+  || { printf '%s\n' 'private campaign input directory must not be a symlink' >&2; exit 1; }
+mkdir -p "$private_input_dir"
+chmod 700 "$private_input_dir"
+private_task_file=$private_input_dir/opus5-missing-pass1-tasks.txt
+temporary_task_file=$(mktemp "$private_input_dir/.opus5-missing-pass1.XXXXXX")
+trap 'rm -f "$temporary_task_file"' EXIT HUP INT TERM
+cat "$TASK_FILE" >"$temporary_task_file"
+chmod 600 "$temporary_task_file"
+cmp -s "$TASK_FILE" "$temporary_task_file" \
+  || { printf '%s\n' 'private task-file staging changed the selected tasks' >&2; exit 1; }
+mv "$temporary_task_file" "$private_task_file"
+trap - EXIT HUP INT TERM
+
+CG_DAYTONA_TASK_FILE=$private_task_file
 CG_RESULTS_DIR=${CG_MISSING_PASS1_RESULTS_DIR:-$production_root/missing-pass1-from-pull}
 CG_DAYTONA_JOB_NAME=cybergym-opus5-cyber
 CG_DAYTONA_PROVIDER_CONTROL_ROOT=$CG_RESULTS_DIR/control
