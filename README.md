@@ -32,7 +32,7 @@ curl --proto '=https' --tlsv1.2 -sSf -L \
 . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
 
 git clone --branch agent/nix-opus-5-handoff \
-  https://github.com/hud-evals/cybergym.git
+  https://github.com/hud-evals/cybergym-opus5-handoff.git cybergym
 cd cybergym
 
 nix run .#bootstrap
@@ -42,6 +42,13 @@ nix run .#bootstrap
 and verifies the complete benchmark and grader, builds the pinned agent, starts
 the private grader and HTTPS relay, runs the no-model checks, and installs the
 reboot-resilient Daytona workers. Rerunning it preserves keys and checkpoints.
+
+The paid controls remain fail-closed until HUD records a Job budget of 401
+projected steps. The local OpenHands ceiling is 200 iterations, and one
+iteration can project an assistant step plus a tool-result step. A HUD server
+that retains its 100-step default will be reported by `daytona-ready` before
+any model call; the operator must not bypass that gate or truncate the saved
+trajectory.
 
 ## Start or control the run
 

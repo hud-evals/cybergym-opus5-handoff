@@ -19,6 +19,7 @@
           curl
           docker-client
           findutils
+          gcc
           git
           git-lfs
           gnumake

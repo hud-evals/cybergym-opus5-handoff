@@ -396,6 +396,7 @@ def test_fresh_host_installer_is_resumable_and_verifies_public_artifacts() -> No
     assert "daytona-ready" in bootstrap
     assert "Protected key configuration already exists" in bootstrap
     assert 'LD_LIBRARY_PATH="${LD_LIBRARY_PATH-}"' in bootstrap
+    assert 'runuser -u "$OPERATOR" -- git -C "$REPOSITORY_ROOT" status' in bootstrap
 
 
 def test_public_relay_exposes_only_task_scoped_https() -> None:
@@ -468,6 +469,7 @@ def test_nix_apps_export_the_compiler_runtime_for_binary_wheels() -> None:
     flake = (ROOT / "flake.nix").read_text(encoding="utf-8")
     configure = (OPS / "configure-secrets.sh").read_text(encoding="utf-8")
     assert flake.count('export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath') == 2
+    assert "\n          gcc\n" in flake
     assert "LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath" in flake
     assert configure.count('"LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH", "")') == 2
 

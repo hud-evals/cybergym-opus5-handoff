@@ -47,7 +47,7 @@ esac
 id "$OPERATOR" >/dev/null 2>&1 || { printf 'bootstrap-host: unknown operator: %s\n' "$OPERATOR" >&2; exit 1; }
 [ -r /dev/tty ] && [ -w /dev/tty ] \
     || { printf '%s\n' 'bootstrap-host: use an interactive SSH session so keys can be entered privately' >&2; exit 1; }
-[ -z "$(git -C "$REPOSITORY_ROOT" status --porcelain=v1 --untracked-files=all)" ] \
+[ -z "$(runuser -u "$OPERATOR" -- git -C "$REPOSITORY_ROOT" status --porcelain=v1 --untracked-files=all)" ] \
     || { printf '%s\n' 'bootstrap-host: checkout must be clean before it can be attested' >&2; exit 1; }
 HOME_DIR=$(getent passwd "$OPERATOR" | cut -d: -f6)
 

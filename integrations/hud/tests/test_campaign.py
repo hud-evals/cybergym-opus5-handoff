@@ -9,6 +9,7 @@ import pytest
 from hud.agents.types import AgentStep
 
 from cybergym_hud.campaign import (
+    CAMPAIGN_HUD_MAX_STEPS,
     CAMPAIGN_JOB_NAME,
     CampaignBlocked,
     CampaignState,
@@ -20,6 +21,7 @@ from cybergym_hud.campaign import (
     require_remote_job_receipt,
     require_remote_trace_enter,
     run_campaign,
+    start_campaign_job,
     validate_campaign_profile,
 )
 from cybergym_hud.native import NativeOpenHandsConfig
@@ -70,6 +72,33 @@ def _config(tmp_path: Path) -> NativeOpenHandsConfig:
         runtime_memory_swap_bytes=8 * 1024**3,
         runtime_network="cybergym-no-internet",
     ).normalized()
+
+
+@pytest.mark.asyncio
+async def test_paid_job_creation_requests_complete_hud_projection_budget() -> None:
+    calls = []
+
+    class Client:
+        async def apost(self, path, *, json=None):
+            calls.append((path, json))
+            return {"ok": True}
+
+    job = await start_campaign_job(CAMPAIGN_JOB_NAME, client=Client())
+
+    assert job.name == CAMPAIGN_JOB_NAME
+    assert job.group == 1
+    assert job.taskset_id is None
+    assert calls == [
+        (
+            f"/trace/job/{job.id}/enter",
+            {
+                "name": CAMPAIGN_JOB_NAME,
+                "group": 1,
+                "taskset_id": None,
+                "max_steps": CAMPAIGN_HUD_MAX_STEPS,
+            },
+        )
+    ]
 
 
 def test_paid_campaign_profile_is_exact_and_width_is_capped(tmp_path: Path) -> None:
@@ -367,6 +396,7 @@ async def test_paid_job_must_be_remotely_acknowledged_before_launch() -> None:
                 "can_edit": True,
                 "group_size": 1,
                 "taskset_id": None,
+                "max_steps": CAMPAIGN_HUD_MAX_STEPS,
             }
 
     await require_remote_job_receipt(job, client=Client())
