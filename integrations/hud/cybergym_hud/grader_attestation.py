@@ -392,15 +392,9 @@ def _validate_runtime(
         raise GraderAttestationError("systemd service account does not exist") from exc
     if any(process.uid != expected_uid or process.gid != expected_gid for process in snapshot.processes):
         raise GraderAttestationError("a service process runs under unexpected credentials")
-    if main.cwd != root or main.executable.name != "uv":
-        raise GraderAttestationError("systemd MainPID is not the expected uv process in the pinned checkout")
-    if len(main.argv) < 2 or main.argv[1] != "run" or main.argv.count("--frozen") != 1:
-        raise GraderAttestationError("systemd MainPID is not using `uv run --frozen`")
+    if main.cwd != root:
+        raise GraderAttestationError("systemd MainPID is not running in the pinned checkout")
     expected_project = str(root / "integrations/hud")
-    if _one_option(main.argv, "--project") != expected_project:
-        raise GraderAttestationError("uv is not using the pinned HUD project")
-    main_module = _module_index(main.argv)
-
     child_candidates = [
         process
         for process in snapshot.processes
@@ -408,18 +402,44 @@ def _validate_runtime(
         and process.executable.name.startswith("python")
         and any(process.argv[index : index + 2] == ("-m", "cybergym.server") for index in range(len(process.argv) - 1))
     ]
-    if len(child_candidates) != 1:
-        raise GraderAttestationError("unit must contain exactly one Python CyberGym server child")
-    child = child_candidates[0]
-    if child.ppid != main.pid or child.cwd != root:
-        raise GraderAttestationError("CyberGym server child is not owned by the pinned uv process")
-    child_module = _module_index(child.argv)
-    if child.argv[1:child_module] != ():
-        raise GraderAttestationError("CyberGym server child has unexpected Python launcher arguments")
-    if main.argv[main_module + 2 :] != child.argv[child_module + 2 :]:
-        raise GraderAttestationError("uv parent and Python child disagree on server arguments")
+    if main.executable.name == "uv":
+        if len(main.argv) < 2 or main.argv[1] != "run" or main.argv.count("--frozen") != 1:
+            raise GraderAttestationError("systemd MainPID is not using `uv run --frozen`")
+        if _one_option(main.argv, "--project") != expected_project:
+            raise GraderAttestationError("uv is not using the pinned HUD project")
+        main_module = _module_index(main.argv)
+        if len(child_candidates) != 1:
+            raise GraderAttestationError("unit must contain exactly one Python CyberGym server child")
+        server = child_candidates[0]
+        if server.ppid != main.pid or server.cwd != root:
+            raise GraderAttestationError("CyberGym server child is not owned by the pinned uv process")
+        server_module = _module_index(server.argv)
+        if server.argv[1:server_module] != ():
+            raise GraderAttestationError("CyberGym server child has unexpected Python launcher arguments")
+        if main.argv[main_module + 2 :] != server.argv[server_module + 2 :]:
+            raise GraderAttestationError("uv parent and Python child disagree on server arguments")
+        attested_processes = (main, server)
+    else:
+        # Modern uv may exec the selected interpreter instead of retaining a
+        # uv parent. Bind this layout to the exact project venv launcher and
+        # require that no second CyberGym server process exists.
+        if child_candidates:
+            raise GraderAttestationError("exec-style CyberGym server unexpectedly has a second server process")
+        server = main
+        server_module = _module_index(server.argv)
+        if server.argv[1:server_module] != ():
+            raise GraderAttestationError("exec-style CyberGym server has unexpected Python launcher arguments")
+        launcher = Path(server.argv[0])
+        expected_venv_bin = root / "integrations/hud/.venv/bin"
+        if (
+            launcher.parent != expected_venv_bin
+            or not launcher.name.startswith("python")
+            or launcher.resolve(strict=True) != server.executable.resolve(strict=True)
+        ):
+            raise GraderAttestationError("systemd MainPID is not the pinned HUD virtualenv Python server")
+        attested_processes = (server,)
 
-    for process in (main, child):
+    for process in attested_processes:
         if _one_option(process.argv, "--binary_dir") != str(binary):
             raise GraderAttestationError("live CyberGym server uses a different binary grader root")
         if _one_option(process.argv, "--host") != expected_address:
@@ -433,22 +453,22 @@ def _validate_runtime(
     exec_paths = _EXEC_PATH_RE.findall(snapshot.exec_start)
     if exec_paths != [str(helper)]:
         raise GraderAttestationError("systemd effective ExecStart is not the pinned server helper")
-    listeners = _process_listeners(child.pid, proc_root=proc_root)
+    listeners = _process_listeners(server.pid, proc_root=proc_root)
     same_port = [listener for listener in listeners if listener.port == port]
     if len(same_port) != 1 or same_port[0].address != expected_address:
         raise GraderAttestationError("server child does not own exactly the expected private listener")
 
     # A final procfs read detects PID reuse or an exec/restart after the stable
     # systemd snapshot was taken.
-    final_child = _read_process(child.pid, proc_root=proc_root)
+    final_server = _read_process(server.pid, proc_root=proc_root)
     final_main = _read_process(main.pid, proc_root=proc_root)
-    if final_child.start_ticks != child.start_ticks or final_main.start_ticks != main.start_ticks:
+    if final_server.start_ticks != server.start_ticks or final_main.start_ticks != main.start_ticks:
         raise GraderAttestationError("service process identity changed during attestation")
     return {
         "main_pid": main.pid,
         "main_pid_start_ticks": main.start_ticks,
-        "server_pid": child.pid,
-        "server_pid_start_ticks": child.start_ticks,
+        "server_pid": server.pid,
+        "server_pid_start_ticks": server.start_ticks,
         "binary_dir": str(binary),
         "host": expected_address,
         "port": port,

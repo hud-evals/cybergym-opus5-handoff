@@ -124,6 +124,71 @@ def test_runtime_attestation_binds_parent_child_binary_path_and_listener(
     assert result["listener_inode"] == 42
 
 
+def test_runtime_attestation_accepts_uv_exec_of_pinned_venv_python(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repo"
+    binary = tmp_path / "binary"
+    helper = root / "integrations/hud/ops/server.sh"
+    venv_python = root / "integrations/hud/.venv/bin/python"
+    helper.parent.mkdir(parents=True)
+    venv_python.parent.mkdir(parents=True)
+    venv_python.symlink_to("/usr/bin/python3")
+    binary.mkdir()
+    server_args = (
+        "--host",
+        "172.17.0.1",
+        "--port",
+        "8666",
+        "--log_dir",
+        "/results/server",
+        "--db_path",
+        "/results/server/poc.db",
+        "--binary_dir",
+        str(binary),
+    )
+    server = _process(
+        pid=100,
+        ppid=1,
+        cwd=root,
+        executable=Path("/usr/bin/python3"),
+        argv=(str(venv_python), "-m", "cybergym.server", *server_args),
+    )
+    snapshot = ServiceSnapshot(
+        unit="cybergym-server.service",
+        active_state="active",
+        sub_state="running",
+        invocation_id="a" * 32,
+        main_pid=100,
+        control_group="/system.slice/cybergym-server.service",
+        exec_start=f"{{ path={helper} ; argv[]={helper} ; }}",
+        fragment_paths=(Path("/etc/systemd/system/cybergym-server.service"),),
+        user="rose",
+        group="rose",
+        processes=(server,),
+    )
+    monkeypatch.setattr("cybergym_hud.grader_attestation.pwd.getpwnam", lambda _name: type("U", (), {"pw_uid": 1000}))
+    monkeypatch.setattr("cybergym_hud.grader_attestation.grp.getgrnam", lambda _name: type("G", (), {"gr_gid": 1000}))
+    monkeypatch.setattr(
+        "cybergym_hud.grader_attestation._process_listeners",
+        lambda _pid, proc_root: (ListenerSnapshot(pid=100, address="172.17.0.1", port=8666, inode=42),),
+    )
+    monkeypatch.setattr("cybergym_hud.grader_attestation._read_process", lambda _pid, proc_root: server)
+
+    result = _validate_runtime(
+        snapshot,
+        repository_root=root,
+        binary_dir=binary,
+        host="172.17.0.1",
+        port=8666,
+        proc_root=tmp_path / "proc",
+    )
+
+    assert result["main_pid"] == result["server_pid"] == 100
+    assert result["listener_inode"] == 42
+
+
 @pytest.mark.parametrize(
     ("mutation", "message"),
     (
