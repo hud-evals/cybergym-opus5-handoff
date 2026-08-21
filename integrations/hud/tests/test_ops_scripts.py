@@ -362,6 +362,9 @@ def test_secret_entry_and_dispatch_never_put_values_in_argv() -> None:
     assert "try-restart" not in configure
     assert "set +x" in dispatcher
     assert 'exec "$SCRIPT_DIR/smoke.sh"' in dispatcher
+    update = (OPS / "update-secrets.sh").read_text(encoding="utf-8")
+    assert "--anthropic-only" in update
+    assert 'anthropic_only = os.sys.argv[2] == "1"' in update
 
 
 def test_fresh_host_assets_are_exactly_pinned() -> None:

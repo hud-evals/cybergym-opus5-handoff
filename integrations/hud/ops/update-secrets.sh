@@ -11,16 +11,24 @@ Usage: sudo update-secrets.sh [--operator USER]
 Prompt privately for HUD_API_KEY, ANTHROPIC_API_KEY, and DAYTONA_API_KEY.
 Requires an existing configured host and preserves CYBERGYM_API_KEY plus all
 grader, relay, task-file, artifact, and runtime settings.
+
+With --anthropic-only, prompt only for ANTHROPIC_API_KEY and preserve the
+existing HUD and Daytona keys.
 EOF
 }
 
 OPERATOR=${SUDO_USER:-rose}
+ANTHROPIC_ONLY=0
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --operator)
             [ "$#" -ge 2 ] || { printf '%s\n' 'update-secrets: --operator requires a user' >&2; exit 2; }
             OPERATOR=$2
             shift 2
+            ;;
+        --anthropic-only)
+            ANTHROPIC_ONLY=1
+            shift
             ;;
         -h|--help) usage; exit 0 ;;
         *) printf 'update-secrets: unknown option: %s\n' "$1" >&2; exit 2 ;;
@@ -32,7 +40,7 @@ id "$OPERATOR" >/dev/null 2>&1 || { printf 'update-secrets: unknown operator: %s
 [ -r /dev/tty ] && [ -w /dev/tty ] \
     || { printf '%s\n' 'update-secrets: a controlling TTY is required (use ssh -t)' >&2; exit 1; }
 
-python3 - "$OPERATOR" <<'PY'
+python3 - "$OPERATOR" "$ANTHROPIC_ONLY" <<'PY'
 from __future__ import annotations
 
 import getpass
@@ -46,6 +54,7 @@ import tempfile
 from pathlib import Path
 
 operator = os.sys.argv[1]
+anthropic_only = os.sys.argv[2] == "1"
 account = pwd.getpwnam(operator)
 group = grp.getgrgid(account.pw_gid)
 root = Path("/etc/cybergym")
@@ -131,15 +140,19 @@ daytona = read_private(paths["daytona"])
 if not server.get("CYBERGYM_API_KEY"):
     raise SystemExit("existing server.env has no CYBERGYM_API_KEY; refusing rotation")
 
-hud_key = prompt_twice("HUD API key")
+hud_key = ""
+daytona_key = ""
+if not anthropic_only:
+    hud_key = prompt_twice("HUD API key")
 anthropic_key = prompt_twice("Anthropic API key")
-daytona_key = prompt_twice("Daytona API key")
 
-runner["HUD_API_KEY"] = hud_key
+if not anthropic_only:
+    daytona_key = prompt_twice("Daytona API key")
+    runner["HUD_API_KEY"] = hud_key
+    daytona["DAYTONA_API_KEY"] = daytona_key
 runner["ANTHROPIC_API_KEY"] = anthropic_key
 runner["CG_MODEL"] = "claude-opus-5"
 runner["CG_REASONING_EFFORT"] = ""
-daytona["DAYTONA_API_KEY"] = daytona_key
 
 # server.env is deliberately never rewritten. The service and task relays keep
 # the exact existing CYBERGYM_API_KEY and protected grader identity.
@@ -147,8 +160,6 @@ write_atomic(paths["runner"], runner, 0o640)
 write_atomic(paths["daytona"], daytona, 0o640)
 
 hud_key = anthropic_key = daytona_key = ""
-print(
-    f"Updated HUD/Anthropic/Daytona keys for root:{group.gr_name}; "
-    "internal grader and relay settings were preserved."
-)
+updated = "Anthropic key" if anthropic_only else "HUD/Anthropic/Daytona keys"
+print(f"Updated {updated} for root:{group.gr_name}; internal grader and relay settings were preserved.")
 PY
