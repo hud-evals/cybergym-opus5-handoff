@@ -65,6 +65,26 @@ The campaign automatically:
   retry.
 - Keeps benchmark task sandboxes off the public Internet.
 
+## Finish the pulled pass@1 cohort only
+
+The verified Opus 5 HUD pull contains valid completed numeric results for 89 of
+the 1,507 tasks. The checked-in scored complement contains the other 1,418
+tasks in canonical catalog order:
+
+```text
+integrations/hud/ops/opus5-pass1-completed-from-pull.txt
+integrations/hud/ops/opus5-missing-pass1-tasks.txt
+```
+
+After `bootstrap` and `daytona-ready`, run exactly the missing pass@1 tasks with:
+
+```bash
+nix run .#run-missing-pass1 -- --confirm-spend YES
+```
+
+This selected campaign checkpoints locally and is safe to resume with the same
+command. Error, partial, and empty pulled traces remain in the missing list.
+
 ## Results
 
 The finalizer runs automatically after the last attempt. It can also be safely

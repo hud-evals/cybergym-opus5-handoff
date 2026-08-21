@@ -26,6 +26,7 @@ SCRIPTS = tuple(
         "daytona-lane.sh",
         "daytona-finalize.sh",
         "daytona-round-barrier.sh",
+        "run-missing-pass1.sh",
         "bootstrap-host.sh",
         "daytona-fleet.sh",
         "install-daytona-fleet.sh",
@@ -468,6 +469,19 @@ def test_nix_apps_export_the_compiler_runtime_for_binary_wheels() -> None:
     assert flake.count('export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath') == 2
     assert "LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath" in flake
     assert configure.count('"LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH", "")') == 2
+
+
+def test_pulled_opus_pass1_complement_is_exact() -> None:
+    completed = (OPS / "opus5-pass1-completed-from-pull.txt").read_text().splitlines()
+    missing = (OPS / "opus5-missing-pass1-tasks.txt").read_text().splitlines()
+    assert len(completed) == len(set(completed)) == 89
+    assert len(missing) == len(set(missing)) == 1418
+    assert set(completed).isdisjoint(missing)
+    flake = (ROOT / "flake.nix").read_text(encoding="utf-8")
+    assert "run-missing-pass1" in flake
+    wrapper = (OPS / "run-missing-pass1.sh").read_text(encoding="utf-8")
+    assert "--confirm-spend YES" in wrapper
+    assert "opus5-missing-pass1-tasks.txt" in wrapper
 
 
 def test_private_server_is_unmasked_and_internal_network_only() -> None:
