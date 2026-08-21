@@ -34,6 +34,7 @@
           pkg-config
           poetry
           python312
+          tmux
           uv
         ];
       mkOperatorApp =
@@ -115,6 +116,7 @@
         {
           default = mkDispatcherApp pkgs "preflight" "preflight";
           bootstrap = mkOperatorApp pkgs "bootstrap" "integrations/hud/ops/bootstrap-host.sh";
+          bootstrap-session = mkOperatorApp pkgs "bootstrap-session" "integrations/hud/ops/bootstrap-session.sh";
           setup = mkOperatorApp pkgs "setup" "integrations/hud/ops/setup.sh";
           configure = mkOperatorApp pkgs "configure" "integrations/hud/ops/configure-secrets.sh";
           update-keys = mkOperatorApp pkgs "update-keys" "integrations/hud/ops/update-secrets.sh";

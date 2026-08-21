@@ -29,6 +29,7 @@ SCRIPTS = tuple(
         "run-missing-pass1.sh",
         "continue-pass3.sh",
         "bootstrap-host.sh",
+        "bootstrap-session.sh",
         "daytona-fleet.sh",
         "install-daytona-fleet.sh",
         "install-relay.sh",
@@ -435,6 +436,7 @@ def test_root_readme_is_a_three_key_fresh_ec2_handoff() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     for expected in (
         "nix run .#bootstrap",
+        "nix run .#bootstrap-session",
         "HUD_API_KEY",
         "ANTHROPIC_API_KEY",
         "DAYTONA_API_KEY",

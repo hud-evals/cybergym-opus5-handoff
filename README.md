@@ -35,13 +35,16 @@ git clone --branch agent/nix-opus-5-handoff \
   https://github.com/hud-evals/cybergym-opus5-handoff.git cybergym
 cd cybergym
 
-nix run .#bootstrap
+nix run .#bootstrap-session
 ```
 
-`bootstrap` privately prompts for the three keys. It installs Docker, downloads
-and verifies the complete benchmark and grader, builds the pinned agent, starts
-the private grader and HTTPS relay, runs the no-model checks, and installs the
-reboot-resilient Daytona workers. Rerunning it preserves keys and checkpoints.
+`bootstrap-session` opens a named `tmux` session and runs the resumable
+`bootstrap` command inside it. It privately prompts for the three keys,
+installs Docker, downloads and verifies the complete benchmark and grader,
+builds the pinned agent, starts the private grader and HTTPS relay, runs the
+no-model checks, and installs the reboot-resilient Daytona workers. If SSH
+disconnects, rerun `nix run .#bootstrap-session` to reattach; the download and
+build continue on the host without manual recovery.
 
 The agent budget follows the published CyberGym OpenHands setup: at most 100
 agent iterations and 2,048 output tokens per model turn. This is harness-budget
