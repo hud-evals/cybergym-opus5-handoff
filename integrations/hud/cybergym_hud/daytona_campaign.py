@@ -226,6 +226,7 @@ def _require_openhands_bridge(repository_root: Path) -> None:
             "TMPDIR",
             "LANG",
             "LC_ALL",
+            "LD_LIBRARY_PATH",
             "SSL_CERT_FILE",
             "REQUESTS_CA_BUNDLE",
             "XDG_CACHE_HOME",

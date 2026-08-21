@@ -505,6 +505,7 @@ def test_daytona_provider_probe_preserves_the_built_openhands_cache() -> None:
         encoding="utf-8"
     )
     assert '"XDG_CACHE_HOME",' in campaign
+    assert '"LD_LIBRARY_PATH",' in campaign
 
 
 def test_private_server_is_unmasked_and_internal_network_only() -> None:
