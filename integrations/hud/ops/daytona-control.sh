@@ -22,7 +22,9 @@ done
 case "$COMMAND" in status|pause|resume) ;; *) printf '%s\n' 'usage: daytona-control.sh {status|pause|resume} --lane N [--confirm-paid-selection]' >&2; exit 2 ;; esac
 case "$LANE" in ''|*[!0-9]*) printf '%s\n' 'daytona-control: --lane must be a positive integer' >&2; exit 2 ;; esac
 [ -n "${CG_RESULTS_DIR-}" ] || { printf '%s\n' 'daytona-control: CG_RESULTS_DIR is required' >&2; exit 1; }
-lane=$(printf '%03d' "$LANE")
+lane_number=$(printf '%s\n' "$LANE" | sed 's/^0*//')
+[ -n "$lane_number" ] || { printf '%s\n' 'daytona-control: --lane must be positive' >&2; exit 2; }
+lane=$(printf '%03d' "$lane_number")
 
 state_dir() {
     printf '%s/pass-%s/lane-%s/daytona-anthropic/state\n' "$CG_RESULTS_DIR" "$1" "$lane"

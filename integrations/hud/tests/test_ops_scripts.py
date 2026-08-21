@@ -270,6 +270,7 @@ def test_daytona_control_is_boundary_safe_and_resume_is_spend_gated() -> None:
     assert "active shard, if any, will finish" in control
     assert "resume requires --confirm-paid-selection" in control
     assert 'daytona-lane.sh" --lane' in control
+    assert "sed 's/^0*//'" in control
 
 
 def test_campaign_service_uses_a_deterministic_operator_path() -> None:
