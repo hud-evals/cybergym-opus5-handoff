@@ -294,6 +294,8 @@ def test_setup_and_services_do_not_mutate_the_pinned_checkout() -> None:
     assert 'uv sync --frozen --project "$REPOSITORY_ROOT/integrations/hud"' in setup
     assert 'uv run --frozen --no-sync --project "$REPOSITORY_ROOT/integrations/hud"' in setup
     assert '"$CG_UV_BIN" run --frozen --no-sync --project' in server
+    assert '"${CG_SERVER_URL%/}/openapi.json"' in server_installer
+    assert "for _attempt in $(seq 1 60)" in server_installer
     assert "ReadWritePaths=/srv/cybergym " not in server_installer
     assert "ReadWritePaths=/srv/cybergym/results-og-fidelity" in server_installer
 

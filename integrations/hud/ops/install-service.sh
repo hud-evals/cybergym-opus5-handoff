@@ -74,4 +74,21 @@ systemctl enable cybergym-server.service
 systemctl restart cybergym-server.service
 systemctl is-active --quiet cybergym-server.service \
     || { printf '%s\n' 'install-service: cybergym-server.service did not become active' >&2; exit 1; }
+
+set -a
+# shellcheck disable=SC1091
+. /etc/cybergym/server.env
+set +a
+ready=0
+for _attempt in $(seq 1 60); do
+    if curl --silent --show-error --fail --max-time 2 \
+        "${CG_SERVER_URL%/}/openapi.json" >/dev/null 2>&1; then
+        ready=1
+        break
+    fi
+    systemctl is-active --quiet cybergym-server.service || break
+    sleep 1
+done
+[ "$ready" -eq 1 ] \
+    || { printf '%s\n' 'install-service: cybergym-server.service did not become ready' >&2; exit 1; }
 printf '%s\n' 'Installed and started cybergym-server.service (private no-egress network bind, unmasked task IDs).'
