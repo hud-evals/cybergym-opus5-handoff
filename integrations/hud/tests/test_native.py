@@ -418,6 +418,8 @@ def test_openhands_subprocess_proxy_uses_private_daytona_attachment(
 
     monkeypatch.setattr("cybergym_hud.daytona_lane.configure_attached_runtime", fake_configure)
     monkeypatch.setattr("cybergym_hud.daytona_lane.prepared_daytona_runtime", fake_runtime)
+    monkeypatch.setenv("XDG_CACHE_HOME", "/srv/cybergym/operator-cache")
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/nix/store/compiler-runtime")
     if signed_transport:
         monkeypatch.setenv("CG_DAYTONA_ACTION_TRANSPORT", "signed-preview")
         openhands_venv = tmp_path / "openhands-venv"
@@ -466,6 +468,8 @@ def test_openhands_subprocess_proxy_uses_private_daytona_attachment(
         "PYTHONPATH": str(tmp_path / "shim"),
         "CYBERGYM_REASONING_EFFORT": "xhigh",
         "CYBERGYM_DAYTONA_ACTION_URL": "http://127.0.0.1:43210",
+        "XDG_CACHE_HOME": "/srv/cybergym/operator-cache",
+        "LD_LIBRARY_PATH": "/nix/store/compiler-runtime",
     }
     observed_env = calls[0][2]["env"]
     assert {name: observed_env[name] for name in expected_env} == expected_env

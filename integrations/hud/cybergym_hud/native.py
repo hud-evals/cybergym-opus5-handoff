@@ -494,6 +494,15 @@ class _OpenHandsSubprocessProxy:
                 or self._daytona_known_hosts is None
             ):
                 raise RuntimeError("Daytona subprocess proxy is missing its rollout binding")
+            for name in (
+                "LD_LIBRARY_PATH",
+                "POETRY_CACHE_DIR",
+                "POETRY_VIRTUALENVS_PATH",
+                "XDG_CACHE_HOME",
+            ):
+                value = os.environ.get(name)
+                if value:
+                    child_env[name] = value
             try:
                 config_index = normalized.index("--config-file") + 1
                 config_path = Path(normalized[config_index])
