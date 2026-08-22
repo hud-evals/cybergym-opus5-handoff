@@ -78,7 +78,7 @@ case "$COMMAND" in
             case "$COMMAND" in daytona-lane|daytona-control|daytona-canary|daytona-missing-pass1|daytona-continue-pass3|daytona-finalize|daytona-round-barrier)
                 DAYTONA_RUN_ENV=${CYBERGYM_DAYTONA_RUN_ENV:-${XDG_CONFIG_HOME:-$HOME/.config}/cybergym/daytona-run.env}
                 [ -f "$DAYTONA_RUN_ENV" ] \
-                    || { printf 'cybergym-ops: run daytona-ready first; missing %s\n' "$DAYTONA_RUN_ENV" >&2; exit 1; }
+                    || { printf 'cybergym-ops: bootstrap is incomplete; rerun nix run .#bootstrap-session; missing %s\n' "$DAYTONA_RUN_ENV" >&2; exit 1; }
                 case "$(stat -c '%a' "$DAYTONA_RUN_ENV")" in
                     600) ;;
                     *) printf 'cybergym-ops: unsafe mode on %s\n' "$DAYTONA_RUN_ENV" >&2; exit 1 ;;

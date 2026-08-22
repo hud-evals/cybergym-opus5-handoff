@@ -21,9 +21,9 @@ fi
 }
 [ -n "$RESULTS_DIR" ] || { printf '%s\n' 'daytona-ready: CG_RESULTS_DIR is required' >&2; exit 1; }
 [ -n "${CG_DAYTONA_RELAY_URL-}" ] \
-    || { printf '%s\n' 'daytona-ready: install the task-scoped HTTPS relay first' >&2; exit 1; }
+    || { printf '%s\n' 'daytona-ready: bootstrap is incomplete; rerun nix run .#bootstrap-session to install the task-scoped HTTPS relay' >&2; exit 1; }
 [ -n "${CG_DAYTONA_RELAY_CIDRS-}" ] \
-    || { printf '%s\n' 'daytona-ready: relay public IPv4 binding is missing' >&2; exit 1; }
+    || { printf '%s\n' 'daytona-ready: bootstrap is incomplete; rerun nix run .#bootstrap-session to install the relay public IPv4 binding' >&2; exit 1; }
 
 root=$RESULTS_DIR/daytona-anthropic
 task_file=$root/full-catalog.txt

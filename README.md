@@ -48,6 +48,13 @@ build continue on the host without manual recovery. If bootstrap exits with an
 error, rerunning the same command starts an idempotent retry from its saved
 files and checkpoints.
 
+Do not start paid work until bootstrap prints `Fresh-host CyberGym setup passed
+without a model call.` Bootstrap installs the HTTPS relay and runs
+`daytona-ready` itself. If a later command reports a missing Daytona run file or
+asks you to install the relay, bootstrap did not finish; rerun
+`nix run .#bootstrap-session` until that success message appears. Running
+`daytona-ready` alone cannot repair a missing relay.
+
 The agent budget follows the published CyberGym OpenHands setup: at most 100
 agent iterations and 2,048 output tokens per model turn. This is harness-budget
 parity, not a reproduction of the paper's model cohort: the model evaluated by
@@ -87,7 +94,7 @@ integrations/hud/ops/opus5-pass1-completed-from-pull.txt
 integrations/hud/ops/opus5-missing-pass1-tasks.txt
 ```
 
-After `bootstrap` and `daytona-ready`, run exactly the missing pass@1 tasks with:
+After bootstrap prints its success message, run exactly the missing pass@1 tasks with:
 
 ```bash
 nix run .#run-missing-pass1 -- --confirm-spend YES
