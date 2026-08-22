@@ -161,8 +161,27 @@ def _copy_reviewed_metadata(artifacts: Path) -> None:
         temporary = destination.with_name(f".{name}.{os.getpid()}.tmp")
         shutil.copyfile(source, temporary)
         os.chown(temporary, 0, 0)
-        os.chmod(temporary, 0o440)
+        os.chmod(temporary, 0o444)
         os.replace(temporary, destination)
+
+
+def _normalize_public_source_permissions() -> None:
+    """Make verified public task data traversable by the unprivileged runner."""
+
+    roots = (SOURCE_ROOT.parent, SOURCE_ROOT, PROVENANCE_ROOT)
+    for root in roots:
+        os.chown(root, 0, 0)
+        os.chmod(root, 0o755)  # noqa: S103 - verified public corpus must be traversable by the runner
+    for path in SOURCE_ROOT.rglob("*"):
+        os.chown(path, 0, 0, follow_symlinks=False)
+        if path.is_dir() and not path.is_symlink():
+            os.chmod(path, 0o755)  # noqa: S103 - verified public corpus must be traversable by the runner
+        elif path.is_file() and not path.is_symlink():
+            os.chmod(path, 0o444)
+    for path in PROVENANCE_ROOT.iterdir():
+        if path.is_file() and not path.is_symlink():
+            os.chown(path, 0, 0)
+            os.chmod(path, 0o444)
 
 
 def _curl_verified(url: str, destination: Path, *, size: int, sha256: str) -> None:
@@ -205,6 +224,19 @@ def _curl_verified(url: str, destination: Path, *, size: int, sha256: str) -> No
     os.replace(partial, destination)
 
 
+def _normalize_binary_permissions() -> None:
+    """Make the verified grader tree readable and executable by its service."""
+
+    for path in (BINARY_ROOT, *BINARY_ROOT.rglob("*")):
+        try:
+            os.chown(path, 0, 0, follow_symlinks=False)
+            if not path.is_symlink():
+                mode = stat.S_IMODE(path.stat().st_mode)
+                os.chmod(path, 0o755 if path.is_dir() else 0o444 | (mode & 0o111))
+        except OSError as exc:
+            raise InstallError(f"could not protect binary grader path: {path}") from exc
+
+
 def _install_binary() -> None:
     if (
         BINARY_ROOT.is_dir()
@@ -213,6 +245,7 @@ def _install_binary() -> None:
         and not BINARY_INSTALL_MARKER.is_symlink()
         and BINARY_INSTALL_MARKER.read_text().strip() == BINARY_ARCHIVE_SHA256
     ):
+        _normalize_binary_permissions()
         return
     if BINARY_ROOT.exists() or BINARY_ROOT.is_symlink():
         raise InstallError(
@@ -243,13 +276,7 @@ def _install_binary() -> None:
     else:
         extracted.rename(BINARY_ROOT)
         staging.rmdir()
-    for path in (BINARY_ROOT, *BINARY_ROOT.rglob("*")):
-        try:
-            os.chown(path, 0, 0, follow_symlinks=False)
-            if not path.is_symlink():
-                os.chmod(path, stat.S_IMODE(path.stat().st_mode) & ~0o022)
-        except OSError as exc:
-            raise InstallError(f"could not protect binary grader path: {path}") from exc
+    _normalize_binary_permissions()
     BINARY_INSTALL_MARKER.write_text(f"{BINARY_ARCHIVE_SHA256}\n", encoding="ascii")
     os.chown(BINARY_INSTALL_MARKER, 0, 0)
     os.chmod(BINARY_INSTALL_MARKER, 0o444)
@@ -325,6 +352,8 @@ def main() -> None:
         SOURCE_INSTALL_MARKER.write_text(f"{SOURCE_MANIFEST_SHA256}\n", encoding="ascii")
         os.chown(SOURCE_INSTALL_MARKER, 0, 0)
         os.chmod(SOURCE_INSTALL_MARKER, 0o444)
+    if install_source:
+        _normalize_public_source_permissions()
     if install_binary:
         _install_binary()
     print(

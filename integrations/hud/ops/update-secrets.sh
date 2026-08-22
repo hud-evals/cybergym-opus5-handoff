@@ -3,6 +3,7 @@
 # The internal grader key and every non-secret relay/runtime setting are kept.
 set -eu
 umask 077
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 usage() {
     cat <<'EOF'
@@ -35,7 +36,14 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-[ "$(id -u)" -eq 0 ] || { printf '%s\n' 'update-secrets: run with sudo' >&2; exit 1; }
+if [ "$(id -u)" -ne 0 ]; then
+    set -- --operator "$OPERATOR"
+    [ "$ANTHROPIC_ONLY" -eq 0 ] || set -- "$@" --anthropic-only
+    exec sudo env \
+        "PATH=$PATH" \
+        "LD_LIBRARY_PATH=${LD_LIBRARY_PATH-}" \
+        "$SCRIPT_DIR/update-secrets.sh" "$@"
+fi
 id "$OPERATOR" >/dev/null 2>&1 || { printf 'update-secrets: unknown operator: %s\n' "$OPERATOR" >&2; exit 1; }
 [ -r /dev/tty ] && [ -w /dev/tty ] \
     || { printf '%s\n' 'update-secrets: a controlling TTY is required (use ssh -t)' >&2; exit 1; }

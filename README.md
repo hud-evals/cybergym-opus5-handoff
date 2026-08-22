@@ -134,6 +134,6 @@ sudo journalctl 'cybergym-daytona@*' -n 200 --no-pager
 Rotate protected keys with:
 
 ```bash
-sudo -E nix run .#update-keys
+nix run .#update-keys
 nix run .#daytona-ready
 ```

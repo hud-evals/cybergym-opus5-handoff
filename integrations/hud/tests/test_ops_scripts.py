@@ -365,6 +365,8 @@ def test_secret_entry_and_dispatch_never_put_values_in_argv() -> None:
     update = (OPS / "update-secrets.sh").read_text(encoding="utf-8")
     assert "--anthropic-only" in update
     assert 'anthropic_only = os.sys.argv[2] == "1"' in update
+    assert 'exec sudo env \\' in update
+    assert '"$SCRIPT_DIR/update-secrets.sh" "$@"' in update
 
 
 def test_fresh_host_assets_are_exactly_pinned() -> None:
@@ -395,6 +397,8 @@ def test_fresh_host_installer_is_resumable_and_verifies_public_artifacts() -> No
     assert "SOURCE_PROVENANCE_SHA256" in corpus
     assert "os.replace(partial, destination)" in corpus
     assert "ThreadPoolExecutor" in corpus
+    assert "_normalize_public_source_permissions()" in corpus
+    assert "os.chmod(path, 0o755 if path.is_dir() else 0o444 | (mode & 0o111))" in corpus
     assert "install-corpus.py" in bootstrap
     assert "cybergym-hud-attest-grader capture" in bootstrap
     assert "daytona-ready" in bootstrap
