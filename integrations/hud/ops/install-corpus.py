@@ -224,19 +224,6 @@ def _curl_verified(url: str, destination: Path, *, size: int, sha256: str) -> No
     os.replace(partial, destination)
 
 
-def _normalize_binary_permissions() -> None:
-    """Make the verified grader tree readable and executable by its service."""
-
-    for path in (BINARY_ROOT, *BINARY_ROOT.rglob("*")):
-        try:
-            os.chown(path, 0, 0, follow_symlinks=False)
-            if not path.is_symlink():
-                mode = stat.S_IMODE(path.stat().st_mode)
-                os.chmod(path, 0o755 if path.is_dir() else (0o555 if mode & 0o111 else 0o444))
-        except OSError as exc:
-            raise InstallError(f"could not protect binary grader path: {path}") from exc
-
-
 def _install_binary() -> None:
     if (
         BINARY_ROOT.is_dir()
@@ -245,7 +232,6 @@ def _install_binary() -> None:
         and not BINARY_INSTALL_MARKER.is_symlink()
         and BINARY_INSTALL_MARKER.read_text().strip() == BINARY_ARCHIVE_SHA256
     ):
-        _normalize_binary_permissions()
         return
     if BINARY_ROOT.exists() or BINARY_ROOT.is_symlink():
         raise InstallError(
@@ -276,7 +262,13 @@ def _install_binary() -> None:
     else:
         extracted.rename(BINARY_ROOT)
         staging.rmdir()
-    _normalize_binary_permissions()
+    for path in (BINARY_ROOT, *BINARY_ROOT.rglob("*")):
+        try:
+            os.chown(path, 0, 0, follow_symlinks=False)
+            if not path.is_symlink():
+                os.chmod(path, stat.S_IMODE(path.stat().st_mode) & ~0o022)
+        except OSError as exc:
+            raise InstallError(f"could not protect binary grader path: {path}") from exc
     BINARY_INSTALL_MARKER.write_text(f"{BINARY_ARCHIVE_SHA256}\n", encoding="ascii")
     os.chown(BINARY_INSTALL_MARKER, 0, 0)
     os.chmod(BINARY_INSTALL_MARKER, 0o444)
