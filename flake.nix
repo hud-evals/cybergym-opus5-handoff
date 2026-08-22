@@ -131,6 +131,7 @@
           daytona-ready = mkDispatcherApp pkgs "daytona-ready" "daytona-ready";
           daytona-control = mkDispatcherApp pkgs "daytona-control" "daytona-control";
           daytona-campaign = mkDispatcherApp pkgs "daytona-campaign" "daytona-campaign";
+          daytona-canary = mkDispatcherApp pkgs "daytona-canary" "daytona-canary";
           daytona-plan = mkOperatorApp pkgs "daytona-plan" "integrations/hud/ops/plan-daytona-lanes.py";
           daytona-lane = mkDispatcherApp pkgs "daytona-lane" "daytona-lane";
           daytona = mkOperatorApp pkgs "daytona" "integrations/hud/ops/daytona-fleet.sh";

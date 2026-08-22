@@ -23,6 +23,7 @@ SCRIPTS = tuple(
         "daytona-ready.sh",
         "daytona-control.sh",
         "daytona-campaign.sh",
+        "daytona-canary.sh",
         "daytona-lane.sh",
         "daytona-finalize.sh",
         "daytona-round-barrier.sh",
@@ -510,6 +511,13 @@ def test_pulled_opus_pass1_complement_is_exact() -> None:
     assert "cybergym-opus5-cyber-pass-$pass_index" in continuation
     assert "run-missing-pass1.sh" not in continuation
     assert "continue-pass3" in flake
+    canary = (OPS / "daytona-canary.sh").read_text(encoding="utf-8")
+    assert "arvo:10400" in canary
+    assert "cybergym-opus5-cyber-canary" in canary
+    assert "CG_DAYTONA_MAX_CONCURRENT=1" in canary
+    assert "CG_DAYTONA_SHARD_SIZE=1" in canary
+    assert "--confirm-spend YES" in canary
+    assert "daytona-canary" in flake
 
 
 def test_daytona_provider_probe_preserves_the_built_openhands_cache() -> None:

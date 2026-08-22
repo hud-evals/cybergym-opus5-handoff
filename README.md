@@ -56,6 +56,7 @@ this branch is Claude Opus 5.
 ## Start or control the run
 
 ```bash
+nix run .#daytona-canary -- --confirm-spend YES  # one isolated paid validation task
 nix run .#daytona -- start
 nix run .#daytona -- status
 nix run .#daytona -- pause
