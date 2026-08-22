@@ -7,6 +7,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPOSITORY_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)
 STATE_DIR=${XDG_STATE_HOME:-$HOME/.local/state}/cybergym
 EXIT_RECEIPT=$STATE_DIR/bootstrap.exit
+LOG_FILE=$STATE_DIR/bootstrap.log
 
 usage() {
     cat <<'EOF'
@@ -32,14 +33,14 @@ rm -f "$EXIT_RECEIPT"
 printf -v quoted_root '%q' "$REPOSITORY_ROOT"
 printf -v quoted_receipt '%q' "$EXIT_RECEIPT"
 printf -v quoted_bootstrap '%q' "$SCRIPT_DIR/bootstrap-host.sh"
-command="cd $quoted_root && $quoted_bootstrap"
+printf -v quoted_log '%q' "$LOG_FILE"
+command="cd $quoted_root && set -o pipefail && $quoted_bootstrap"
 if [ "$#" -gt 0 ]; then
-    command+=" --"
     for argument in "$@"; do
         printf -v quoted_argument '%q' "$argument"
         command+=" $quoted_argument"
     done
 fi
-command+="; rc=\$?; printf '\\nCyberGym bootstrap exited with status %s.\\n' \"\$rc\"; printf '%s\\n' \"\$rc\" > $quoted_receipt; exit \"\$rc\""
+command+=" 2>&1 | tee -a $quoted_log; rc=\${PIPESTATUS[0]}; printf '\\nCyberGym bootstrap exited with status %s. Full output: %s\\n' \"\$rc\" $quoted_log; printf '%s\\n' \"\$rc\" > $quoted_receipt; exit \"\$rc\""
 
 exec tmux new-session -s "$SESSION" "$command"

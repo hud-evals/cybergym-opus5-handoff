@@ -46,7 +46,8 @@ no-model checks, and installs the reboot-resilient Daytona workers. If SSH
 disconnects, rerun `nix run .#bootstrap-session` to reattach; the download and
 build continue on the host without manual recovery. If bootstrap exits with an
 error, rerunning the same command starts an idempotent retry from its saved
-files and checkpoints.
+files and checkpoints. The complete output is retained at
+`~/.local/state/cybergym/bootstrap.log`, including after the tmux session exits.
 
 Do not start paid work until bootstrap prints `Fresh-host CyberGym setup passed
 without a model call.` Bootstrap installs the HTTPS relay and runs
