@@ -232,6 +232,8 @@ def _install_binary() -> None:
         and not BINARY_INSTALL_MARKER.is_symlink()
         and BINARY_INSTALL_MARKER.read_text().strip() == BINARY_ARCHIVE_SHA256
     ):
+        os.chown(BINARY_ROOT, 0, 0)
+        os.chmod(BINARY_ROOT, 0o755)  # noqa: S103 - the released grader corpus must be traversable
         return
     if BINARY_ROOT.exists() or BINARY_ROOT.is_symlink():
         raise InstallError(
@@ -266,7 +268,8 @@ def _install_binary() -> None:
         try:
             os.chown(path, 0, 0, follow_symlinks=False)
             if not path.is_symlink():
-                os.chmod(path, stat.S_IMODE(path.stat().st_mode) & ~0o022)
+                mode = 0o755 if path == BINARY_ROOT else stat.S_IMODE(path.stat().st_mode) & ~0o022
+                os.chmod(path, mode)
         except OSError as exc:
             raise InstallError(f"could not protect binary grader path: {path}") from exc
     BINARY_INSTALL_MARKER.write_text(f"{BINARY_ARCHIVE_SHA256}\n", encoding="ascii")

@@ -401,7 +401,9 @@ def test_fresh_host_installer_is_resumable_and_verifies_public_artifacts() -> No
     assert "os.replace(partial, destination)" in corpus
     assert "ThreadPoolExecutor" in corpus
     assert "_normalize_public_source_permissions()" in corpus
-    assert "os.chmod(path, stat.S_IMODE(path.stat().st_mode) & ~0o022)" in corpus
+    assert "stat.S_IMODE(path.stat().st_mode) & ~0o022" in corpus
+    assert "os.chmod(BINARY_ROOT, 0o755)" in corpus
+    assert "mode = 0o755 if path == BINARY_ROOT" in corpus
     assert "install-corpus.py" in bootstrap
     assert "cybergym-hud-attest-grader capture" in bootstrap
     assert "daytona-ready" in bootstrap
