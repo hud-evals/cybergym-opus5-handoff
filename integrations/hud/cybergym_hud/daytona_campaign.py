@@ -159,7 +159,7 @@ def _require_canonical_quiescent() -> None:
     if (
         _service_property("ActiveState") != "inactive"
         or _service_property("MainPID") != "0"
-        or _service_property("UnitFileState") != "disabled"
+        or _service_property("UnitFileState") not in {"", "disabled"}
     ):
         raise CampaignBlocked("canonical CyberGym campaign must be inactive, empty, and disabled")
     docker = subprocess.run(

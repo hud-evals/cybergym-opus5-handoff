@@ -107,6 +107,9 @@ def test_independent_daytona_campaign_requires_canonical_quiescence(
     )
     _require_canonical_quiescent()
 
+    properties["UnitFileState"] = ""
+    _require_canonical_quiescent()
+
     properties["ActiveState"] = "active"
     with pytest.raises(CampaignBlocked, match="canonical CyberGym campaign"):
         _require_canonical_quiescent()
