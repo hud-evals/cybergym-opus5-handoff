@@ -232,7 +232,7 @@ def _normalize_binary_permissions() -> None:
             os.chown(path, 0, 0, follow_symlinks=False)
             if not path.is_symlink():
                 mode = stat.S_IMODE(path.stat().st_mode)
-                os.chmod(path, 0o755 if path.is_dir() else 0o444 | (mode & 0o111))
+                os.chmod(path, 0o755 if path.is_dir() else (0o555 if mode & 0o111 else 0o444))
         except OSError as exc:
             raise InstallError(f"could not protect binary grader path: {path}") from exc
 

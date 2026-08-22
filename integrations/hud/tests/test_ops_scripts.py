@@ -398,7 +398,7 @@ def test_fresh_host_installer_is_resumable_and_verifies_public_artifacts() -> No
     assert "os.replace(partial, destination)" in corpus
     assert "ThreadPoolExecutor" in corpus
     assert "_normalize_public_source_permissions()" in corpus
-    assert "os.chmod(path, 0o755 if path.is_dir() else 0o444 | (mode & 0o111))" in corpus
+    assert "os.chmod(path, 0o755 if path.is_dir() else (0o555 if mode & 0o111 else 0o444))" in corpus
     assert "install-corpus.py" in bootstrap
     assert "cybergym-hud-attest-grader capture" in bootstrap
     assert "daytona-ready" in bootstrap
