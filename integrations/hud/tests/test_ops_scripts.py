@@ -508,6 +508,10 @@ def test_pulled_opus_pass1_complement_is_exact() -> None:
     assert 'chmod 600 "$temporary_task_file"' in wrapper
     assert 'cmp -s "$TASK_FILE" "$temporary_task_file"' in wrapper
     assert "CG_DAYTONA_TASK_FILE=$private_task_file" in wrapper
+    daytona_campaign = (OPS / "daytona-campaign.sh").read_text(encoding="utf-8")
+    assert "ARTIFACT_PREFLIGHT_CONCURRENCY=1" in daytona_campaign
+    assert 'artifact-preflight-concurrency "$ARTIFACT_PREFLIGHT_CONCURRENCY"' in daytona_campaign
+    assert 'artifact-preflight-concurrency "${CG_CAMPAIGN_MAX_CONCURRENT' not in daytona_campaign
     continuation = (OPS / "continue-pass3.sh").read_text(encoding="utf-8")
     assert "for pass_index in 2 3" in continuation
     assert "cybergym-opus5-cyber-pass-$pass_index" in continuation

@@ -20,6 +20,7 @@ MAX_CONCURRENT=${CG_DAYTONA_MAX_CONCURRENT:-60}
 SHARD_SIZE=${CG_DAYTONA_SHARD_SIZE:-60}
 JOB_NAME=${CG_DAYTONA_JOB_NAME:-cybergym-opus5-cyber}
 UV_BIN=${CG_UV_BIN:-uv}
+ARTIFACT_PREFLIGHT_CONCURRENCY=1
 CONFIRM=0
 
 usage() {
@@ -64,7 +65,7 @@ exec "$UV_BIN" run --frozen --no-sync --project "$REPOSITORY_ROOT/integrations/h
   --state-dir "$RESULTS_DIR/daytona-anthropic/state" \
   --task-file "$TASK_FILE" \
   --artifact-preflight-report "$ARTIFACT_REPORT" \
-  --artifact-preflight-concurrency "${CG_CAMPAIGN_MAX_CONCURRENT:-1}" \
+  --artifact-preflight-concurrency "$ARTIFACT_PREFLIGHT_CONCURRENCY" \
   --daytona-preflight-report "$DAYTONA_REPORT" \
   --daytona-known-hosts "$KNOWN_HOSTS" \
   --max-concurrent "$MAX_CONCURRENT" \
